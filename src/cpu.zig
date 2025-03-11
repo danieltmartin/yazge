@@ -1,116 +1,159 @@
+const CPU = @This();
+
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const sm83 = @import("sm83.zig");
 
 const rom_bank_0_end = 0x3FFF;
 
-pub const CPU = struct {
-    af: AFRegister = AFRegister.init(),
-    bc: Register = Register.init(),
-    de: Register = Register.init(),
-    hl: Register = Register.init(),
-    sp: u16 = 0,
-    pc: u16 = 0,
-    prefixed: bool = false,
-    cycles: u3 = 0, // additional cycles caused by last executed instruction
+const disable_boot_rom = 0xFF50;
+const lcd_y_coordinate = 0xFF44;
 
-    boot_rom: []u8,
-    boot_rom_mapped: bool = true,
-    memory: [65536]u8 = std.mem.zeroes([65536]u8),
-    dummy: u8 = 0,
+alloc: Allocator,
+af: AFRegister = AFRegister.init(),
+bc: Register = Register.init(),
+de: Register = Register.init(),
+hl: Register = Register.init(),
+sp: u16 = 0,
+pc: u16 = 0,
+prefixed: bool = false,
+cycles: u3 = 0, // additional cycles caused by last executed instruction
 
-    pub fn init(boot_rom: []u8, cartridge_rom: []u8) !CPU {
-        var cpu: CPU = .{
-            .boot_rom = boot_rom,
-        };
+boot_rom: []u8,
+boot_rom_mapped: bool = true,
+memory: [65536]u8 = std.mem.zeroes([65536]u8),
+dummy: u8 = 0,
 
-        if (cartridge_rom.len != 32768) {
-            return CPUError.InvalidCartridgeSize;
-        }
+pub fn init(alloc: Allocator, boot_rom: []u8, cartridge_rom: []u8) !*CPU {
+    var cpu = try alloc.create(CPU);
+    errdefer alloc.destroy(cpu);
 
-        @memcpy(cpu.memory[0..cartridge_rom.len], cartridge_rom);
-        return cpu;
+    if (boot_rom.len != 256) {
+        return CPUError.InvalidBootROMSize;
     }
 
-    fn next(self: *CPU) !void {
-        // TODO sleep
-        self.cycles = 0;
-
-        const opcode = self.popPC(u8);
-
-        std.debug.print("{x:0>2}\n", .{opcode});
-        if (self.prefixed) {
-            self.printInstruction(sm83.cbprefixed[opcode]);
-            self.prefixed = false;
-            prefixed_instructions[opcode](self);
-        } else {
-            self.printInstruction(sm83.unprefixed[opcode]);
-            instructions[opcode](self);
-        }
+    if (cartridge_rom.len != 32768) {
+        return CPUError.InvalidCartridgeSize;
     }
 
-    fn printInstruction(self: *CPU, instr: sm83.Instruction) void {
-        std.debug.print("{s}", .{
-            @tagName(instr.mnemonic),
-        });
-        for (0..instr.bytes - 1) |i| {
-            std.debug.print(" ${x:0>2}", .{self.mem(self.pc).* + i});
-        }
-        std.debug.print("\n", .{});
+    cpu.* = .{
+        .alloc = alloc,
+        .boot_rom = try alloc.dupe(u8, boot_rom),
+    };
+    errdefer alloc.free(cpu.boot_rom);
+
+    @memcpy(cpu.memory[0..cartridge_rom.len], cartridge_rom);
+    return cpu;
+}
+
+pub fn deinit(self: *CPU) void {
+    self.alloc.free(self.boot_rom);
+    self.alloc.destroy(self);
+}
+
+pub fn next(self: *CPU) void {
+    self.cycles = 0;
+
+    const opcode = self.popPC(u8);
+
+    if (self.prefixed) {
+        self.prefixed = false;
+        prefixed_instructions[opcode](self);
+    } else {
+        instructions[opcode](self);
+    }
+}
+
+pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
+    var pc = self.pc;
+    var opcode = self.readMem(pc);
+    var instr = sm83.unprefixed[opcode];
+    var num_bytes = instr.bytes;
+    if (instr.mnemonic == sm83.Mnemonic.PREFIX) {
+        pc += 1;
+        opcode = self.readMem(pc);
+        instr = sm83.cbprefixed[opcode];
+        num_bytes = instr.bytes - 1;
     }
 
-    fn popPC(self: *CPU, t: anytype) t {
-        switch (t) {
-            u8 => {
-                const val = self.mem(self.pc);
-                self.pc += 1;
-                return val.*;
-            },
-            u16 => {
-                const low = @as(u16, self.mem(self.pc).*);
-                const high = @as(u16, self.mem(self.pc + 1).*);
-                self.pc += 2;
-                return (high << 8) | low;
-            },
-            i8 => {
-                const val: i8 = @bitCast(self.mem(self.pc).*);
-                self.pc += 1;
-                return val;
-            },
-            else => @compileError("invalid type"),
-        }
+    buf[0] = opcode;
+    for (1..num_bytes) |i| {
+        pc += 1;
+        buf[i] = self.readMem(pc);
     }
 
-    fn dump(self: *CPU) void {
-        std.debug.print("sp=${x:0>4}; pc=${x:0>4}\n", .{ self.sp, self.pc });
-    }
+    return .{ instr, buf[0..num_bytes] };
+}
 
-    fn xor(self: *CPU, dest: *u8, v1: u8, v2: u8) void {
-        dest.* = v1 ^ v2;
-        self.af.parts.z = @intFromBool(dest.* == 0);
-        self.af.parts.n = 0;
-        self.af.parts.h = 0;
-        self.af.parts.c = 0;
+fn printInstruction(self: *CPU, instr: sm83.Instruction) void {
+    std.debug.print("{s}", .{
+        @tagName(instr.mnemonic),
+    });
+    for (0..instr.bytes - 1) |i| {
+        std.debug.print(" ${x:0>2}", .{self.readMem(self.pc) + i});
     }
+    std.debug.print("\n", .{});
+}
 
-    fn bit_test(self: *CPU, bit: u3, register: u8) void {
-        self.af.parts.z = @intFromBool((@as(u8, 1) << bit) & register == 0);
-        self.af.parts.n = 0;
-        self.af.parts.h = 1;
+fn popPC(self: *CPU, t: anytype) t {
+    switch (t) {
+        u8 => {
+            const val = self.readMem(self.pc);
+            self.pc += 1;
+            return val;
+        },
+        u16 => {
+            const low = @as(u16, self.readMem(self.pc));
+            const high = @as(u16, self.readMem(self.pc + 1));
+            self.pc += 2;
+            return (high << 8) | low;
+        },
+        i8 => {
+            const val: i8 = @bitCast(self.readMem(self.pc));
+            self.pc += 1;
+            return val;
+        },
+        else => @compileError("invalid type"),
     }
+}
 
-    fn mem(self: *CPU, pointer: u16) *u8 {
-        if (pointer == 0xFF44) {
-            // TODO this is temporary to fake the boot ROM into thinking
-            // we're in a vblank period.
-            self.dummy = 144;
-            return &self.dummy;
-        }
-        if (self.boot_rom_mapped and pointer <= self.boot_rom.len) {
-            return &self.boot_rom[pointer];
-        }
-        return &self.memory[pointer];
+pub fn dump(self: *CPU) void {
+    std.debug.print("sp=${x:0>4}; pc=${x:0>4}\n", .{ self.sp, self.pc });
+}
+
+fn xor(self: *CPU, dest: *u8, v1: u8, v2: u8) void {
+    dest.* = v1 ^ v2;
+    self.af.parts.z = @intFromBool(dest.* == 0);
+    self.af.parts.n = 0;
+    self.af.parts.h = 0;
+    self.af.parts.c = 0;
+}
+
+fn bit_test(self: *CPU, bit: u3, register: u8) void {
+    self.af.parts.z = @intFromBool((@as(u8, 1) << bit) & register == 0);
+    self.af.parts.n = 0;
+    self.af.parts.h = 1;
+}
+
+fn writeMem(self: *CPU, pointer: u16, val: u8) void {
+    switch (pointer) {
+        disable_boot_rom => self.boot_rom_mapped = false,
+        else => self.memory[pointer] = val,
     }
-};
+}
+
+fn readMem(self: *CPU, pointer: u16) u8 {
+    if (pointer == lcd_y_coordinate) {
+        // TODO this is temporary to fake the boot ROM into thinking
+        // we're in a vblank period.
+        self.dummy = 144;
+        return self.dummy;
+    }
+    if (self.boot_rom_mapped and pointer <= self.boot_rom.len) {
+        return self.boot_rom[pointer];
+    }
+    return self.memory[pointer];
+}
 
 const Register = extern union {
     whole: u16,
@@ -144,31 +187,11 @@ const CPUError = error{
     UnhandledOperand,
     UnexpectedEnd,
     ProgramCounterOutOfBounds,
+    InvalidBootROMSize,
     InvalidCartridgeSize,
 };
 
-test "execute boot ROM" {
-    const fs = @import("std").fs;
-    const dir = fs.cwd();
-
-    const boot_rom = try dir.readFileAlloc(std.testing.allocator, "dmg_boot.bin", 512);
-    defer std.testing.allocator.free(boot_rom);
-
-    const cartridge_rom = try dir.readFileAlloc(std.testing.allocator, "Tetris (World) (Rev 1).gb", 32768);
-    defer std.testing.allocator.free(cartridge_rom);
-
-    var cpu = try CPU.init(boot_rom, cartridge_rom);
-    const stdin = std.io.getStdIn().reader();
-    var buf: [1024]u8 = undefined;
-    while (true) {
-        if (cpu.pc == 0x00FE) {
-            _ = try stdin.readUntilDelimiter(&buf, '\n');
-        }
-        cpu.dump();
-        try cpu.next();
-        std.debug.print("\n", .{});
-    }
-}
+fn noop(_: *CPU) void {}
 
 fn ld_sp_n16(cpu: *CPU) void {
     cpu.sp = cpu.popPC(u16);
@@ -187,12 +210,12 @@ fn ld_hl_n16(cpu: *CPU) void {
 }
 
 fn ld_p_hld_a(cpu: *CPU) void {
-    cpu.mem(cpu.hl.whole).* = cpu.af.parts.a;
+    cpu.writeMem(cpu.hl.whole, cpu.af.parts.a);
     cpu.hl.whole -%= 1;
 }
 
 fn ld_p_a16_a(cpu: *CPU) void {
-    cpu.af.parts.a = cpu.mem(cpu.popPC(u16)).*;
+    cpu.af.parts.a = cpu.readMem(cpu.popPC(u16));
 }
 
 fn ld_a_n8(cpu: *CPU) void {
@@ -212,7 +235,7 @@ fn ld_l_n8(cpu: *CPU) void {
 }
 
 fn ld_a_p_de(cpu: *CPU) void {
-    cpu.af.parts.a = cpu.mem(cpu.de.whole).*;
+    cpu.af.parts.a = cpu.readMem(cpu.de.whole);
 }
 
 fn ld_c_n8(cpu: *CPU) void {
@@ -248,23 +271,23 @@ fn ld_h_a(cpu: *CPU) void {
 }
 
 fn ldh_p_c_a(cpu: *CPU) void {
-    cpu.mem(0xFF00 + @as(u16, cpu.bc.parts.lo)).* = cpu.af.parts.a;
+    cpu.writeMem(0xFF00 + @as(u16, cpu.bc.parts.lo), cpu.af.parts.a);
 }
 
 fn ldh_p_a8_a(cpu: *CPU) void {
-    cpu.mem(0xFF00 + @as(u16, cpu.popPC(u8))).* = cpu.af.parts.a;
+    cpu.writeMem(0xFF00 + @as(u16, cpu.popPC(u8)), cpu.af.parts.a);
 }
 
 fn ldh_a_p_a8(cpu: *CPU) void {
-    cpu.af.parts.a = cpu.mem(0xFF00 + @as(u16, cpu.popPC(u8))).*;
+    cpu.af.parts.a = cpu.readMem(0xFF00 + @as(u16, cpu.popPC(u8)));
 }
 
 fn ld_p_hl_a(cpu: *CPU) void {
-    cpu.mem(cpu.hl.whole).* = cpu.af.parts.a;
+    cpu.writeMem(cpu.hl.whole, cpu.af.parts.a);
 }
 
 fn ld_p_hli_a(cpu: *CPU) void {
-    cpu.mem(cpu.hl.whole).* = cpu.af.parts.a;
+    cpu.writeMem(cpu.hl.whole, cpu.af.parts.a);
     cpu.hl.whole +%= 1;
 }
 
@@ -345,7 +368,7 @@ fn dec_e(cpu: *CPU) void {
 }
 
 fn add_a_p_hl(cpu: *CPU) void {
-    const val = cpu.mem(cpu.hl.whole).*;
+    const val = cpu.readMem(cpu.hl.whole);
     cpu.af.parts.h = @intFromBool((cpu.af.parts.a & 0x0F) + (val & 0x0F) > 0x0F);
     const result = @addWithOverflow(cpu.af.parts.a, val);
     cpu.af.parts.a = result[0];
@@ -381,23 +404,23 @@ fn rl_c(cpu: *CPU) void {
 fn call_a16(cpu: *CPU) void {
     const a16 = cpu.popPC(u16);
     cpu.sp -= 1;
-    cpu.mem(cpu.sp).* = @truncate(cpu.pc >> 8);
+    cpu.writeMem(cpu.sp, @truncate(cpu.pc >> 8));
     cpu.sp -= 1;
-    cpu.mem(cpu.sp).* = @truncate(cpu.pc);
+    cpu.writeMem(cpu.sp, @truncate(cpu.pc));
     cpu.pc = a16;
 }
 
 fn push_bc(cpu: *CPU) void {
     cpu.sp -= 1;
-    cpu.mem(cpu.sp).* = cpu.bc.parts.hi;
+    cpu.writeMem(cpu.sp, cpu.bc.parts.hi);
     cpu.sp -= 1;
-    cpu.mem(cpu.sp).* = cpu.bc.parts.lo;
+    cpu.writeMem(cpu.sp, cpu.bc.parts.lo);
 }
 
 fn pop_bc(cpu: *CPU) void {
-    cpu.bc.parts.lo = cpu.mem(cpu.sp).*;
+    cpu.bc.parts.lo = cpu.readMem(cpu.sp);
     cpu.sp += 1;
-    cpu.bc.parts.hi = cpu.mem(cpu.sp).*;
+    cpu.bc.parts.hi = cpu.readMem(cpu.sp);
     cpu.sp += 1;
 }
 
@@ -435,7 +458,7 @@ fn cp_a_n8(cpu: *CPU) void {
 }
 
 fn cp_a_p_hl(cpu: *CPU) void {
-    const n8 = cpu.mem(cpu.hl.whole).*;
+    const n8 = cpu.readMem(cpu.hl.whole);
     const result = cpu.af.parts.a -% n8;
     cpu.af.parts.z = @intFromBool(result == 0);
     cpu.af.parts.n = 1;
@@ -444,19 +467,19 @@ fn cp_a_p_hl(cpu: *CPU) void {
 }
 
 fn ret(cpu: *CPU) void {
-    cpu.pc = @as(u16, cpu.mem(cpu.sp).*) | (@as(u16, cpu.mem(cpu.sp + 1).*) << 8);
+    cpu.pc = @as(u16, cpu.readMem(cpu.sp)) | (@as(u16, cpu.readMem(cpu.sp + 1)) << 8);
     cpu.sp += 2;
 }
 
 const instructions = initInstructions();
 const prefixed_instructions = initPrefixedInstructions();
 
-fn initInstructions() [256]*const fn (cpu: *CPU) void {
-    var instrs: [256]*const fn (cpu: *CPU) void = undefined;
-    for (0..256) |i| {
-        instrs[i] = &unhandled;
-    }
+const OpHandler = *const fn (cpu: *CPU) void;
 
+fn initInstructions() [256]OpHandler {
+    var instrs = [_]OpHandler{&unhandled} ** 256;
+
+    instrs[0x00] = noop;
     instrs[0x31] = ld_sp_n16;
     instrs[0xAF] = xor_a_a;
     instrs[0x21] = ld_hl_n16;
@@ -509,11 +532,8 @@ fn initInstructions() [256]*const fn (cpu: *CPU) void {
     return instrs;
 }
 
-fn initPrefixedInstructions() [256]*const fn (cpu: *CPU) void {
-    var instrs: [256]*const fn (cpu: *CPU) void = undefined;
-    for (0..256) |i| {
-        instrs[i] = &unhandled;
-    }
+fn initPrefixedInstructions() [256]OpHandler {
+    var instrs = [_]OpHandler{&unhandled} ** 256;
 
     instrs[0x7C] = bit_7_h;
     instrs[0x11] = rl_c;
