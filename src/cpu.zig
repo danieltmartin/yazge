@@ -17,7 +17,7 @@ hl: Register = Register.init(),
 sp: u16 = 0,
 pc: u16 = 0,
 prefixed: bool = false,
-cycles: u3 = 0, // additional cycles caused by last executed instruction
+cycles: u4 = 0, // additional cycles caused by last executed instruction
 
 boot_rom: []u8,
 boot_rom_mapped: bool = true,
@@ -51,7 +51,7 @@ pub fn deinit(self: *CPU) void {
     self.alloc.destroy(self);
 }
 
-pub fn next(self: *CPU) void {
+pub fn step(self: *CPU) u4 {
     self.cycles = 0;
 
     const opcode = self.popPC(u8);
@@ -62,6 +62,8 @@ pub fn next(self: *CPU) void {
     } else {
         instructions[opcode](self);
     }
+
+    return self.cycles;
 }
 
 pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
@@ -118,7 +120,41 @@ fn popPC(self: *CPU, t: anytype) t {
 }
 
 pub fn dump(self: *CPU) void {
-    std.debug.print("sp=${x:0>4}; pc=${x:0>4}\n", .{ self.sp, self.pc });
+    dumpReg("a", self.af.parts.a);
+    std.debug.print(", ", .{});
+    dumpReg("z", self.af.parts.z);
+    std.debug.print(", ", .{});
+    dumpReg("n", self.af.parts.n);
+    std.debug.print(", ", .{});
+    dumpReg("h", self.af.parts.h);
+    std.debug.print(", ", .{});
+    dumpReg("c", self.af.parts.c);
+    std.debug.print(", ", .{});
+    dumpReg("b", self.bc.parts.hi);
+    std.debug.print(", ", .{});
+    dumpReg("c", self.bc.parts.lo);
+    std.debug.print(", ", .{});
+    dumpReg("d", self.de.parts.hi);
+    std.debug.print(", ", .{});
+    dumpReg("e", self.de.parts.lo);
+    std.debug.print(", ", .{});
+    dumpReg("h", self.hl.parts.hi);
+    std.debug.print(", ", .{});
+    dumpReg("l", self.hl.parts.lo);
+    std.debug.print(", ", .{});
+    dumpReg("pc", self.pc);
+    std.debug.print(", ", .{});
+    dumpReg("sp", self.sp);
+    std.debug.print("\n", .{});
+}
+
+fn dumpReg(name: []const u8, value: anytype) void {
+    switch (@TypeOf(value)) {
+        u1 => std.debug.print("{s}={d}", .{ name, value }),
+        u8 => std.debug.print("{s}=${x:0>2}", .{ name, value }),
+        u16 => std.debug.print("{s}=${x:0>4}", .{ name, value }),
+        else => std.debug.print("{s}={d}", .{ name, value }),
+    }
 }
 
 fn xor(self: *CPU, dest: *u8, v1: u8, v2: u8) void {

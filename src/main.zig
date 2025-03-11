@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rl = @import("raylib");
 const CPU = @import("CPU.zig");
+const PPU = @import("PPU.zig");
 const debug = @import("debug.zig");
 
 const screen_width = 160;
@@ -33,10 +34,13 @@ pub fn main() !void {
     const cpu = try CPU.init(allocator, boot_rom, cartridge_rom);
     defer cpu.deinit();
 
-    try mainLoop(allocator, cpu);
+    const ppu = try PPU.init(allocator);
+    defer ppu.deinit();
+
+    try mainLoop(allocator, cpu, ppu);
 }
 
-fn mainLoop(alloc: Allocator, cpu: *CPU) !void {
+fn mainLoop(alloc: Allocator, cpu: *CPU, ppu: *PPU) !void {
     rl.initWindow(screen_width, screen_height, "yazge");
     defer rl.closeWindow();
 
@@ -44,11 +48,14 @@ fn mainLoop(alloc: Allocator, cpu: *CPU) !void {
 
     while (!rl.windowShouldClose()) {
         var cycles: u32 = 0;
-        while (cycles < cycles_per_frame) : (cycles += 1) {
+        while (cycles < cycles_per_frame) {
             const disassembled = try debug.disassembleNext(alloc, cpu);
             defer alloc.free(disassembled);
             std.debug.print("{s}\n", .{disassembled});
-            cpu.next();
+            const cyclesThisStep = cpu.step();
+            ppu.step(cyclesThisStep);
+            cpu.dump();
+            cycles += cyclesThisStep;
         }
 
         rl.beginDrawing();
