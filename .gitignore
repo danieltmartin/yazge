@@ -1,3 +1,4 @@
 *.bin
+*.gb
 .zig-cache
 zig-out

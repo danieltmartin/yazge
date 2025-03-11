@@ -32,7 +32,7 @@ const Flags = struct {
 
 pub fn main() !void {
     const instructions = try parseInstructionsJSON();
-    const output_file = try std.fs.cwd().createFile("sm83.zig", .{ .truncate = true });
+    const output_file = try std.fs.cwd().createFile("src/sm83.zig", .{ .truncate = true });
     defer output_file.close();
     const writer = output_file.writer();
 
@@ -55,7 +55,7 @@ fn writeInstructions(writer: anytype, field_name: []const u8, instructions: []In
             \\        .bytes = {d},
             \\        .cycles = {d},
             \\        .immediate = {},
-            \\        .operands = [_]Operand {{
+            \\        .operands = &[_]Operand {{
         ,
             .{
                 normalizeMnemonic(instr.mnemonic),
@@ -66,10 +66,12 @@ fn writeInstructions(writer: anytype, field_name: []const u8, instructions: []In
         );
 
         for (instr.operands) |oper| {
+            const operand_name = try normalizeOperandName(oper.name);
+            defer alloc.free(operand_name);
             try std.fmt.format(writer,
                 \\
                 \\            .{{ .type = OperandType.{s}, .bytes = {?d}, .immediate = {} }},
-            , .{ normalizeOperandName(oper.name), oper.bytes, oper.immediate });
+            , .{ operand_name, oper.bytes, oper.immediate });
         }
 
         try writer.writeAll("\n        },\n    },\n");
@@ -85,23 +87,23 @@ fn writeInstructions(writer: anytype, field_name: []const u8, instructions: []In
 
 fn writeCommonTypes(writer: anytype) !void {
     try writer.writeAll(
-        \\const Instruction = struct {
-        \\    mnemonic: []u8,
+        \\pub const Instruction = struct {
+        \\    mnemonic: Mnemonic,
         \\    bytes: u2,
         \\    cycles: u8,
-        \\    operands: []Operand,
+        \\    operands: []const Operand,
         \\    immediate: bool,
         \\};
         \\
         \\
     );
     try writer.writeAll(
-        \\const OperandType = enum { AF, A, BC, B, C, DE, D, E, HL, H, L, SP, PC, N8, N16, E8, U3, VEC };
+        \\pub const OperandType = enum { AF, A, BC, B, C, DE, D, E, HL, H, L, SP, PC, A8, A16, N8, N16, E8, U3, VEC, Z, NZ, NC };
         \\
         \\
     );
     try writer.writeAll(
-        \\const Operand = struct {
+        \\pub const Operand = struct {
         \\    type: OperandType,
         \\    bytes: ?u2 = null,
         \\    immediate: bool,
@@ -123,7 +125,7 @@ fn writeMnemonicEnum(writer: anytype, instructions: Instructions) !void {
     }
 
     try writer.writeAll(
-        \\const Mnemonic = enum {
+        \\pub const Mnemonic = enum {
         \\
     );
 
@@ -187,15 +189,15 @@ fn normalizeMnemonic(mnemonic: []const u8) []const u8 {
     return mnemonic;
 }
 
-fn normalizeOperandName(name: []const u8) []const u8 {
+fn normalizeOperandName(name: []const u8) ![]const u8 {
     if (name.len == 0) {
-        return name;
+        return "";
     }
     if (name[0] == '$') {
-        return "VEC";
+        return alloc.dupe(u8, "VEC");
     }
     if (name[0] >= '0' and name[0] <= '9') {
-        return "U3";
+        return alloc.dupe(u8, "U3");
     }
-    return name;
+    return std.ascii.allocUpperString(alloc, name);
 }
