@@ -1,15 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rl = @import("raylib");
-const CPU = @import("CPU.zig");
-const PPU = @import("PPU.zig");
+const Gameboy = @import("Gameboy.zig");
 const debug = @import("debug.zig");
-
-const screen_width = 160;
-const screen_height = 144;
-const fps = 60;
-const gameboy_cpu_freq = 4194304;
-const cycles_per_frame = gameboy_cpu_freq / fps;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -31,32 +24,20 @@ pub fn main() !void {
     const cartridge_rom = try dir.readFileAlloc(allocator, args[2], 32768);
     defer allocator.free(cartridge_rom);
 
-    const cpu = try CPU.init(allocator, boot_rom, cartridge_rom);
-    defer cpu.deinit();
+    const gameboy = try Gameboy.init(allocator, boot_rom, cartridge_rom);
+    defer gameboy.deinit();
 
-    const ppu = try PPU.init(allocator);
-    defer ppu.deinit();
-
-    try mainLoop(allocator, cpu, ppu);
+    try mainLoop(gameboy);
 }
 
-fn mainLoop(alloc: Allocator, cpu: *CPU, ppu: *PPU) !void {
-    rl.initWindow(screen_width, screen_height, "yazge");
+fn mainLoop(gameboy: *Gameboy) !void {
+    rl.initWindow(Gameboy.screen_width, Gameboy.screen_height, "yazge");
     defer rl.closeWindow();
 
-    rl.setTargetFPS(fps);
+    rl.setTargetFPS(Gameboy.fps);
 
     while (!rl.windowShouldClose()) {
-        var cycles: u32 = 0;
-        while (cycles < cycles_per_frame) {
-            const disassembled = try debug.disassembleNext(alloc, cpu);
-            defer alloc.free(disassembled);
-            std.debug.print("{s}\n", .{disassembled});
-            const cyclesThisStep = cpu.step();
-            ppu.step(cyclesThisStep);
-            cpu.dump();
-            cycles += cyclesThisStep;
-        }
+        try gameboy.stepFrame();
 
         rl.beginDrawing();
         defer rl.endDrawing();

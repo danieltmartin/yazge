@@ -3,55 +3,52 @@ const CPU = @This();
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sm83 = @import("sm83.zig");
+const MMU = @import("MMU.zig");
 
-const rom_bank_0_end = 0x3FFF;
-
-const disable_boot_rom = 0xFF50;
-const lcd_y_coordinate = 0xFF44;
+const CPUError = error{
+    UnhandledOpCode,
+    UnhandledOperand,
+    UnexpectedEnd,
+    ProgramCounterOutOfBounds,
+};
 
 alloc: Allocator,
+
+// Registers
 af: AFRegister = AFRegister.init(),
 bc: Register = Register.init(),
 de: Register = Register.init(),
 hl: Register = Register.init(),
 sp: u16 = 0,
 pc: u16 = 0,
+
+/// The MMU allows reading and writing to memory and I/O devices.
+mmu: *MMU,
+
+/// Whether a PREFIX instruction was encountered on the last step, indicating
+/// that the next opcode fetched belongs to the extended instruction set.
 prefixed: bool = false,
-cycles: u4 = 0, // additional cycles caused by last executed instruction
 
-boot_rom: []u8,
-boot_rom_mapped: bool = true,
-memory: [65536]u8 = std.mem.zeroes([65536]u8),
-dummy: u8 = 0,
+/// Number of cycles caused by the last executed instruction.
+cycles: u8 = 0,
 
-pub fn init(alloc: Allocator, boot_rom: []u8, cartridge_rom: []u8) !*CPU {
-    var cpu = try alloc.create(CPU);
+pub fn init(alloc: Allocator, mmu: *MMU) !*CPU {
+    const cpu = try alloc.create(CPU);
     errdefer alloc.destroy(cpu);
-
-    if (boot_rom.len != 256) {
-        return CPUError.InvalidBootROMSize;
-    }
-
-    if (cartridge_rom.len != 32768) {
-        return CPUError.InvalidCartridgeSize;
-    }
 
     cpu.* = .{
         .alloc = alloc,
-        .boot_rom = try alloc.dupe(u8, boot_rom),
+        .mmu = mmu,
     };
-    errdefer alloc.free(cpu.boot_rom);
 
-    @memcpy(cpu.memory[0..cartridge_rom.len], cartridge_rom);
     return cpu;
 }
 
 pub fn deinit(self: *CPU) void {
-    self.alloc.free(self.boot_rom);
     self.alloc.destroy(self);
 }
 
-pub fn step(self: *CPU) u4 {
+pub fn step(self: *CPU) u8 {
     self.cycles = 0;
 
     const opcode = self.popPC(u8);
@@ -68,12 +65,12 @@ pub fn step(self: *CPU) u4 {
 
 pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
     var pc = self.pc;
-    var opcode = self.readMem(pc);
+    var opcode = self.peekMem(pc);
     var instr = sm83.unprefixed[opcode];
     var num_bytes = instr.bytes;
     if (instr.mnemonic == sm83.Mnemonic.PREFIX) {
         pc += 1;
-        opcode = self.readMem(pc);
+        opcode = self.peekMem(pc);
         instr = sm83.cbprefixed[opcode];
         num_bytes = instr.bytes - 1;
     }
@@ -81,7 +78,7 @@ pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
     buf[0] = opcode;
     for (1..num_bytes) |i| {
         pc += 1;
-        buf[i] = self.readMem(pc);
+        buf[i] = self.peekMem(pc);
     }
 
     return .{ instr, buf[0..num_bytes] };
@@ -92,7 +89,7 @@ fn printInstruction(self: *CPU, instr: sm83.Instruction) void {
         @tagName(instr.mnemonic),
     });
     for (0..instr.bytes - 1) |i| {
-        std.debug.print(" ${x:0>2}", .{self.readMem(self.pc) + i});
+        std.debug.print(" ${x:0>2}", .{self.peekMem(self.pc) + i});
     }
     std.debug.print("\n", .{});
 }
@@ -122,13 +119,6 @@ fn popPC(self: *CPU, t: anytype) t {
 pub fn dump(self: *CPU) void {
     dumpReg("a", self.af.parts.a);
     std.debug.print(", ", .{});
-    dumpReg("z", self.af.parts.z);
-    std.debug.print(", ", .{});
-    dumpReg("n", self.af.parts.n);
-    std.debug.print(", ", .{});
-    dumpReg("h", self.af.parts.h);
-    std.debug.print(", ", .{});
-    dumpReg("c", self.af.parts.c);
     std.debug.print(", ", .{});
     dumpReg("b", self.bc.parts.hi);
     std.debug.print(", ", .{});
@@ -142,6 +132,13 @@ pub fn dump(self: *CPU) void {
     std.debug.print(", ", .{});
     dumpReg("l", self.hl.parts.lo);
     std.debug.print(", ", .{});
+    dumpReg("flag_z", self.af.parts.z);
+    std.debug.print(", ", .{});
+    dumpReg("flag_n", self.af.parts.n);
+    std.debug.print(", ", .{});
+    dumpReg("flag_h", self.af.parts.h);
+    std.debug.print(", ", .{});
+    dumpReg("flag_c", self.af.parts.c);
     dumpReg("pc", self.pc);
     std.debug.print(", ", .{});
     dumpReg("sp", self.sp);
@@ -172,23 +169,17 @@ fn bit_test(self: *CPU, bit: u3, register: u8) void {
 }
 
 fn writeMem(self: *CPU, pointer: u16, val: u8) void {
-    switch (pointer) {
-        disable_boot_rom => self.boot_rom_mapped = false,
-        else => self.memory[pointer] = val,
-    }
+    self.cycles += 4;
+    self.mmu.writeMem(pointer, val);
 }
 
 fn readMem(self: *CPU, pointer: u16) u8 {
-    if (pointer == lcd_y_coordinate) {
-        // TODO this is temporary to fake the boot ROM into thinking
-        // we're in a vblank period.
-        self.dummy = 144;
-        return self.dummy;
-    }
-    if (self.boot_rom_mapped and pointer <= self.boot_rom.len) {
-        return self.boot_rom[pointer];
-    }
-    return self.memory[pointer];
+    self.cycles += 4;
+    return self.mmu.readMem(pointer);
+}
+
+fn peekMem(self: *CPU, pointer: u16) u8 {
+    return self.mmu.readMem(pointer);
 }
 
 const Register = extern union {
@@ -216,15 +207,6 @@ const AFRegister = extern union {
     fn init() AFRegister {
         return AFRegister{ .whole = 0 };
     }
-};
-
-const CPUError = error{
-    UnhandledOpCode,
-    UnhandledOperand,
-    UnexpectedEnd,
-    ProgramCounterOutOfBounds,
-    InvalidBootROMSize,
-    InvalidCartridgeSize,
 };
 
 fn noop(_: *CPU) void {}
