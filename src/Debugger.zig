@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 const CPU = @import("CPU.zig");
 const PPU = @import("PPU.zig");
 const Gameboy = @import("Gameboy.zig");
+const sm83 = @import("sm83.zig");
 
 const Command = union(enum) {
     Continue,
@@ -106,6 +107,11 @@ pub fn replLoop(self: *Debugger) !void {
 pub fn shouldStep(self: *Debugger) bool {
     if (!self.mutex.tryLock()) return false;
     defer self.mutex.unlock();
+
+    const opcode = self.gameboy.cpu.peekMem(self.gameboy.cpu.pc);
+    const on_prefix = !self.gameboy.cpu.prefixed and sm83.unprefixed[opcode].mnemonic == .PREFIX;
+
+    if (on_prefix) return true;
 
     if (self.stop_on_next) {
         self.stop_on_next = false;
@@ -241,6 +247,10 @@ pub fn printCPUState(self: *Debugger) !void {
     defer self.out_mutex.unlock();
     const writer = self.buf_out.writer();
     try self.gameboy.cpu.dump(writer);
+
+    const instruction = try disassembleNext(self.alloc, self.gameboy.cpu);
+    try writer.print("-> {s}\n", .{instruction});
+
     try self.buf_out.flush();
 }
 

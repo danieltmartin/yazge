@@ -69,7 +69,7 @@ pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
     var opcode = self.peekMem(pc);
     var instr = sm83.unprefixed[opcode];
     var num_bytes = instr.bytes;
-    if (instr.mnemonic == sm83.Mnemonic.PREFIX) {
+    if (self.prefixed or instr.mnemonic == sm83.Mnemonic.PREFIX) {
         pc += 1;
         opcode = self.peekMem(pc);
         instr = sm83.cbprefixed[opcode];
@@ -216,7 +216,7 @@ fn readMem(self: *CPU, pointer: u16) u8 {
     return self.mmu.readMem(pointer);
 }
 
-fn peekMem(self: *CPU, pointer: u16) u8 {
+pub fn peekMem(self: *CPU, pointer: u16) u8 {
     return self.mmu.readMem(pointer);
 }
 
@@ -341,31 +341,16 @@ fn ld_p_hld_a(cpu: *CPU) void {
     cpu.hl.whole -%= 1;
 }
 
-fn ld_p_hl_a(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.a).r8.*);
+fn ld_p_hl_r8(name: OperandName) OpHandler {
+    return struct {
+        fn ld(cpu: *CPU) void {
+            cpu.writeMem(cpu.hl.whole, cpu.op(name).r8.*);
+        }
+    }.ld;
 }
 
-fn ld_p_hl_b(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.b).r8.*);
-}
-
-fn ld_p_hl_c(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.c).r8.*);
-}
-
-fn ld_p_hl_d(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.d).r8.*);
-}
-fn ld_p_hl_e(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.e).r8.*);
-}
-
-fn ld_p_hl_h(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.h).r8.*);
-}
-
-fn ld_p_hl_l(cpu: *CPU) void {
-    cpu.writeMem(cpu.hl.whole, cpu.op(.l).r8.*);
+fn ld_p_hl_n8(cpu: *CPU) void {
+    cpu.writeMem(cpu.hl.whole, cpu.popPC(u8));
 }
 
 fn ld_p_a16_a(cpu: *CPU) void {
@@ -396,6 +381,14 @@ fn ld_r8_r8(dest: OperandName, src: OperandName) OpHandler {
     return struct {
         fn ld(cpu: *CPU) void {
             cpu.op(dest).r8.* = cpu.op(src).r8.*;
+        }
+    }.ld;
+}
+
+fn ld_r8_p_hl(dest: OperandName) OpHandler {
+    return struct {
+        fn ld(cpu: *CPU) void {
+            cpu.op(dest).r8.* = cpu.readMem(cpu.hl.whole);
         }
     }.ld;
 }
@@ -464,39 +457,16 @@ fn bit_7_h(cpu: *CPU) void {
     cpu.bit_test(7, cpu.op(.h).r8.*);
 }
 
-fn inc_r8(cpu: *CPU, r8: *u8) void {
-    cpu.af.parts.h = @intFromBool(r8.* & 0x0F == 0x0F);
-    r8.* +%= 1;
-    cpu.af.parts.z = @intFromBool(r8.* == 0);
-    cpu.af.parts.n = 0;
-}
-
-fn inc_a(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.a).r8.*);
-}
-
-fn inc_b(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.b).r8.*);
-}
-
-fn inc_c(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.c).r8.*);
-}
-
-fn inc_d(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.d).r8.*);
-}
-
-fn inc_e(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.e).r8.*);
-}
-
-fn inc_h(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.h).r8.*);
-}
-
-fn inc_l(cpu: *CPU) void {
-    inc_r8(cpu, &cpu.op(.l).r8.*);
+fn inc_r8(name: OperandName) OpHandler {
+    return struct {
+        fn inc(cpu: *CPU) void {
+            const r8 = cpu.op(name).r8;
+            cpu.af.parts.h = @intFromBool(r8.* & 0x0F == 0x0F);
+            r8.* +%= 1;
+            cpu.af.parts.z = @intFromBool(r8.* == 0);
+            cpu.af.parts.n = 0;
+        }
+    }.inc;
 }
 
 fn inc_bc(cpu: *CPU) void {
@@ -576,6 +546,20 @@ fn add_a_r8(name: OperandName) OpHandler {
     }.add;
 }
 
+fn add_hl_r16(name: OperandName) OpHandler {
+    return struct {
+        fn add(cpu: *CPU) void {
+            const r16 = cpu.op(name).r16;
+            const mask = 0b0000111111111111;
+            cpu.af.parts.h = @intFromBool((cpu.op(.hl).r16.* & mask) + (r16.* & mask) > mask);
+            const result = @addWithOverflow(cpu.op(.hl).r16.*, r16.*);
+            cpu.op(.hl).r16.* = result[0];
+            cpu.af.parts.n = 0;
+            cpu.af.parts.c = result[1];
+        }
+    }.add;
+}
+
 fn add_a(cpu: *CPU, val: u8) void {
     cpu.af.parts.h = @intFromBool((cpu.op(.a).r8.* & 0x0F) + (val & 0x0F) > 0x0F);
     const result = @addWithOverflow(cpu.op(.a).r8.*, val);
@@ -606,11 +590,16 @@ fn sub(cpu: *CPU, dest: *u8, less: u8) void {
 }
 
 fn sub_a_n8(cpu: *CPU) void {
-    sub(cpu, &cpu.op(.a).r8.*, cpu.popPC(u8));
+    sub(cpu, cpu.op(.a).r8, cpu.popPC(u8));
 }
 
-fn sub_a_b(cpu: *CPU) void {
-    sub(cpu, &cpu.op(.a).r8.*, cpu.op(.b).r8.*);
+fn sub_a_r8(name: OperandName) OpHandler {
+    return struct {
+        fn sub_r8(cpu: *CPU) void {
+            const r8 = cpu.op(name).r8;
+            sub(cpu, cpu.op(.a).r8, r8.*);
+        }
+    }.sub_r8;
 }
 
 fn rla(cpu: *CPU) void {
@@ -732,15 +721,23 @@ fn call_a16(cpu: *CPU) void {
     cpu.pc = a16;
 }
 
-fn call_nz_a16(cpu: *CPU) void {
+fn call_cc_a16(cpu: *CPU, condition: bool) void {
     const a16 = cpu.popPC(u16);
-    if (cpu.af.parts.z == 0) {
+    if (condition) {
         cpu.sp -= 1;
         cpu.writeMem(cpu.sp, @truncate(cpu.pc >> 8));
         cpu.sp -= 1;
         cpu.writeMem(cpu.sp, @truncate(cpu.pc));
         cpu.pc = a16;
     }
+}
+
+fn call_nz_a16(cpu: *CPU) void {
+    call_cc_a16(cpu, cpu.af.parts.z == 0);
+}
+
+fn call_nc_a16(cpu: *CPU) void {
+    call_cc_a16(cpu, cpu.af.parts.c == 0);
 }
 
 fn push_r16(cpu: *CPU, r16: *u16) void {
@@ -767,9 +764,9 @@ fn push_hl(cpu: *CPU) void {
 }
 
 fn pop_r16(cpu: *CPU, r16: *u16) void {
-    r16.* |= cpu.readMem(cpu.sp);
+    r16.* = (r16.* & 0xFF00) | cpu.readMem(cpu.sp);
     cpu.sp += 1;
-    r16.* |= @as(u16, cpu.readMem(cpu.sp)) << 8;
+    r16.* = (r16.* & 0x00FF) | (@as(u16, cpu.readMem(cpu.sp)) << 8);
     cpu.sp += 1;
 }
 
@@ -795,6 +792,22 @@ fn jp_a16(cpu: *CPU) void {
 
 fn jp_hl(cpu: *CPU) void {
     cpu.pc = cpu.hl.whole;
+}
+
+fn jp_nz_a16(cpu: *CPU) void {
+    const a16 = cpu.popPC(u16);
+    if (cpu.af.parts.z == 0) {
+        cpu.pc = a16;
+        cpu.cycles += 4;
+    }
+}
+
+fn jp_z_a16(cpu: *CPU) void {
+    const a16 = cpu.popPC(u16);
+    if (cpu.af.parts.z == 1) {
+        cpu.pc = a16;
+        cpu.cycles += 4;
+    }
 }
 
 fn jr_cc_e8(cpu: *CPU, condition: bool) void {
@@ -829,13 +842,26 @@ fn jr_e8(cpu: *CPU) void {
     cpu.cycles += 4;
 }
 
-fn cp_a_n8(cpu: *CPU) void {
-    const n8 = cpu.popPC(u8);
-    const result = cpu.op(.a).r8.* -% n8;
+fn cp_a(cpu: *CPU, value: u8) void {
+    const result = cpu.op(.a).r8.* -% value;
     cpu.af.parts.z = @intFromBool(result == 0);
     cpu.af.parts.n = 1;
-    cpu.af.parts.h = @intFromBool((cpu.op(.a).r8.* & 0x0F) < (n8 & 0x0F));
-    cpu.af.parts.c = @intFromBool(cpu.op(.a).r8.* < n8);
+    cpu.af.parts.h = @intFromBool((cpu.op(.a).r8.* & 0x0F) < (value & 0x0F));
+    cpu.af.parts.c = @intFromBool(cpu.op(.a).r8.* < value);
+}
+
+fn cp_a_r8(name: OperandName) OpHandler {
+    return struct {
+        fn cp(cpu: *CPU) void {
+            const r8 = cpu.op(name).r8;
+            cp_a(cpu, r8.*);
+        }
+    }.cp;
+}
+
+fn cp_a_n8(cpu: *CPU) void {
+    const n8 = cpu.popPC(u8);
+    cp_a(cpu, n8);
 }
 
 fn cp_a_p_hl(cpu: *CPU) void {
@@ -852,12 +878,24 @@ fn ret(cpu: *CPU) void {
     cpu.sp += 2;
 }
 
+fn ret_cc(cpu: *CPU, condition: bool) void {
+    cpu.cycles += 4;
+    if (condition) {
+        cpu.cycles += 4;
+        ret(cpu);
+    }
+}
+
+fn ret_c(cpu: *CPU) void {
+    ret_cc(cpu, cpu.af.parts.c == 1);
+}
+
 fn ret_nc(cpu: *CPU) void {
-    if (cpu.af.parts.c == 0) ret(cpu);
+    ret_cc(cpu, cpu.af.parts.c == 0);
 }
 
 fn ret_z(cpu: *CPU) void {
-    if (cpu.af.parts.z == 1) ret(cpu);
+    ret_cc(cpu, cpu.af.parts.z == 1);
 }
 
 fn di(cpu: *CPU) void {
@@ -882,7 +920,13 @@ fn initInstructions() [256]OpHandler {
     instrs[0x0E] = ld_c_n8;
     instrs[0x3E] = ld_a_n8;
     instrs[0xE2] = ldh_p_c_a;
-    instrs[0x0C] = inc_c;
+    instrs[0x3C] = inc_r8(.a);
+    instrs[0x04] = inc_r8(.b);
+    instrs[0x0C] = inc_r8(.c);
+    instrs[0x14] = inc_r8(.d);
+    instrs[0x1C] = inc_r8(.e);
+    instrs[0x24] = inc_r8(.h);
+    instrs[0x2C] = inc_r8(.l);
     instrs[0xE0] = ldh_p_a8_a;
     instrs[0x11] = ld_de_n16;
     instrs[0x1A] = ld_a_p_de;
@@ -903,12 +947,9 @@ fn initInstructions() [256]OpHandler {
     instrs[0x0D] = dec_c;
     instrs[0x2E] = ld_l_n8;
     instrs[0x18] = jr_e8;
-    instrs[0x04] = inc_b;
     instrs[0x1E] = ld_e_n8;
     instrs[0xF0] = ldh_a_p_a8;
     instrs[0x1D] = dec_e;
-    instrs[0x24] = inc_h;
-    instrs[0x90] = sub_a_b;
     instrs[0x15] = dec_d;
     instrs[0x16] = ld_d_n8;
     instrs[0xBE] = cp_a_p_hl;
@@ -917,8 +958,6 @@ fn initInstructions() [256]OpHandler {
     instrs[0x47] = ld_r8_r8(.b, .a);
     instrs[0x2A] = ld_a_p_hli;
     instrs[0x12] = ld_p_de_a;
-    instrs[0x1C] = inc_e;
-    instrs[0x14] = inc_d;
     instrs[0xF3] = di;
     instrs[0xE5] = push_hl;
     instrs[0xE1] = pop_hl;
@@ -934,6 +973,7 @@ fn initInstructions() [256]OpHandler {
     instrs[0xC6] = add_a_n8;
     instrs[0xD0] = ret_nc;
     instrs[0xC8] = ret_z;
+    instrs[0xD8] = ret_c;
     instrs[0xB6] = or_a_p_hl;
     instrs[0x2D] = dec_l;
     instrs[0x35] = dec_p_hl;
@@ -942,7 +982,6 @@ fn initInstructions() [256]OpHandler {
     instrs[0xFA] = ld_a_p_a16;
     instrs[0xE6] = and_a_n8;
     instrs[0xC4] = call_nz_a16;
-    instrs[0x2C] = inc_l;
     instrs[0xA9] = xor_r8_r8(.a, .c);
     instrs[0xCE] = adc_a_n8;
     instrs[0xB7] = or_a_a;
@@ -954,13 +993,14 @@ fn initInstructions() [256]OpHandler {
     instrs[0x26] = ld_h_n8;
     instrs[0x38] = jr_c_e8;
     instrs[0x25] = dec_h;
-    instrs[0x77] = ld_p_hl_a;
-    instrs[0x70] = ld_p_hl_b;
-    instrs[0x71] = ld_p_hl_c;
-    instrs[0x72] = ld_p_hl_d;
-    instrs[0x73] = ld_p_hl_e;
-    instrs[0x74] = ld_p_hl_h;
-    instrs[0x75] = ld_p_hl_l;
+    instrs[0x77] = ld_p_hl_r8(.a);
+    instrs[0x70] = ld_p_hl_r8(.b);
+    instrs[0x71] = ld_p_hl_r8(.c);
+    instrs[0x72] = ld_p_hl_r8(.d);
+    instrs[0x73] = ld_p_hl_r8(.e);
+    instrs[0x74] = ld_p_hl_r8(.h);
+    instrs[0x75] = ld_p_hl_r8(.l);
+    instrs[0x36] = ld_p_hl_n8;
     instrs[0xD1] = pop_de;
     instrs[0xE9] = jp_hl;
     instrs[0xF9] = ld_sp_hl;
@@ -1026,6 +1066,34 @@ fn initInstructions() [256]OpHandler {
     instrs[0x3B] = dec_r16(.sp);
     instrs[0x08] = ld_p_a16_sp;
     instrs[0xEE] = xor_a_n8;
+    instrs[0x09] = add_hl_r16(.bc);
+    instrs[0x19] = add_hl_r16(.de);
+    instrs[0x29] = add_hl_r16(.hl);
+    instrs[0x39] = add_hl_r16(.sp);
+    instrs[0xC2] = jp_nz_a16;
+    instrs[0xCA] = jp_z_a16;
+    instrs[0x7E] = ld_r8_p_hl(.a);
+    instrs[0x46] = ld_r8_p_hl(.b);
+    instrs[0x4E] = ld_r8_p_hl(.c);
+    instrs[0x56] = ld_r8_p_hl(.d);
+    instrs[0x5E] = ld_r8_p_hl(.e);
+    instrs[0x66] = ld_r8_p_hl(.h);
+    instrs[0x6E] = ld_r8_p_hl(.l);
+    instrs[0xBF] = cp_a_r8(.a);
+    instrs[0xB8] = cp_a_r8(.b);
+    instrs[0xB9] = cp_a_r8(.c);
+    instrs[0xBA] = cp_a_r8(.d);
+    instrs[0xBB] = cp_a_r8(.e);
+    instrs[0xBC] = cp_a_r8(.h);
+    instrs[0xBD] = cp_a_r8(.l);
+    instrs[0xD4] = call_nc_a16;
+    instrs[0x97] = sub_a_r8(.a);
+    instrs[0x90] = sub_a_r8(.b);
+    instrs[0x91] = sub_a_r8(.c);
+    instrs[0x92] = sub_a_r8(.d);
+    instrs[0x93] = sub_a_r8(.e);
+    instrs[0x94] = sub_a_r8(.h);
+    instrs[0x95] = sub_a_r8(.l);
 
     return instrs;
 }
