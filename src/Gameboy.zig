@@ -47,7 +47,7 @@ pub fn init(alloc: Allocator, boot_rom: []u8, cartridge_rom: []u8) !*Gameboy {
     errdefer debugger.deinit();
 
     debugger.enabled = true;
-    try debugger.addBreakpoint(0x0000);
+    try debugger.addBreakpoint(0x00fe);
     try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;

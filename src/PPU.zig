@@ -37,6 +37,8 @@ x: u8 = 0,
 control: LCDControl = @bitCast(@as(u8, 0)),
 vram: [8192]u8 = undefined,
 framebuffer: [160][144]u2 = undefined,
+scroll_x: u8 = 0,
+scroll_y: u8 = 0,
 
 pub fn init(alloc: Allocator) !*PPU {
     const ppu = try alloc.create(PPU);
@@ -115,11 +117,13 @@ fn draw(self: *PPU, x: u8) void {
         return;
     }
     const y = self.current_scanline;
-    const tilemap_addr = self.get_tilemap_addr(x, y);
+    const scroll_x = x +% self.scroll_x;
+    const scroll_y = y +% self.scroll_y;
+    const tilemap_addr = self.get_tilemap_addr(scroll_x, scroll_y);
     const tile_number = self.vram_read(tilemap_addr);
     const tile_addr = self.get_tile_addr(tile_number);
-    const tile_x = x % 8;
-    const tile_y = y % 8;
+    const tile_x = scroll_x % 8;
+    const tile_y = scroll_y % 8;
     const tile_pixel = self.get_tile_pixel(tile_addr, tile_x, tile_y);
     self.framebuffer[x][y] = tile_pixel;
 }

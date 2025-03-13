@@ -12,6 +12,8 @@ pub const MMUError = error{
 const disable_boot_rom = 0xFF50;
 const lcd_control = 0xFF40;
 const lcd_y_coordinate = 0xFF44;
+const scroll_y = 0xFF42;
+const scroll_x = 0xFF43;
 
 const vram_start = 0x8000;
 const vram_end = 0x9FFF;
@@ -58,6 +60,12 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
             const control: PPU.LCDControl = @bitCast(val);
             self.ppu.setControl(control);
         },
+        scroll_x => {
+            self.ppu.scroll_x = val;
+        },
+        scroll_y => {
+            self.ppu.scroll_y = val;
+        },
         else => {
             if (pointer >= vram_start and pointer <= vram_end) {
                 self.ppu.vram[pointer - vram_start] = val;
@@ -71,6 +79,12 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
 pub fn readMem(self: *MMU, pointer: u16) u8 {
     if (pointer == lcd_y_coordinate) {
         return self.ppu.current_scanline;
+    }
+    if (pointer == scroll_x) {
+        return self.ppu.scroll_x;
+    }
+    if (pointer == scroll_y) {
+        return self.ppu.scroll_y;
     }
     if (self.boot_rom_mapped and pointer <= self.boot_rom.len) {
         return self.boot_rom[pointer];
