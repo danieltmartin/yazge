@@ -234,7 +234,7 @@ fn ld_p_hld_a(cpu: *CPU) void {
 }
 
 fn ld_p_a16_a(cpu: *CPU) void {
-    cpu.af.parts.a = cpu.readMem(cpu.popPC(u16));
+    cpu.writeMem(cpu.popPC(u16), cpu.af.parts.a);
 }
 
 fn ld_a_n8(cpu: *CPU) void {

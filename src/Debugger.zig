@@ -235,6 +235,8 @@ pub fn printVram(self: *Debugger) void {
 }
 
 pub fn printCPUState(self: *Debugger) !void {
+    self.gameboy.mutex.lock();
+    defer self.gameboy.mutex.unlock();
     self.out_mutex.lock();
     defer self.out_mutex.unlock();
     const writer = self.buf_out.writer();

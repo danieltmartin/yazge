@@ -42,15 +42,17 @@ fn mainLoop(gameboy: *Gameboy) !void {
         try gameboy.stepFrame();
 
         rl.beginTextureMode(texture);
-        for (0..Gameboy.screen_width) |x| {
-            for (0..Gameboy.screen_height) |y| {
-                const color = switch (gameboy.ppu.framebuffer[x][y]) {
-                    0 => rl.Color.white,
-                    1 => rl.Color.light_gray,
-                    2 => rl.Color.dark_gray,
-                    3 => rl.Color.black,
-                };
-                rl.drawPixel(@intCast(x), @intCast(y), color);
+        {
+            for (0..Gameboy.screen_width) |x| {
+                for (0..Gameboy.screen_height) |y| {
+                    const color = switch (gameboy.ppu.framebuffer[x][y]) {
+                        0 => rl.Color.white,
+                        1 => rl.Color.light_gray,
+                        2 => rl.Color.dark_gray,
+                        3 => rl.Color.black,
+                    };
+                    rl.drawPixel(@intCast(x), @intCast(Gameboy.screen_height - y), color);
+                }
             }
         }
         rl.endTextureMode();

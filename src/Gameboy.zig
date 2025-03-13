@@ -67,9 +67,16 @@ pub fn stepFrame(self: *Gameboy) !void {
     var cycles: u32 = 0;
     while (cycles < cycles_per_frame) {
         if (!self.debugger.shouldStep()) return;
-        const cyclesThisStep = self.cpu.step();
-        self.ppu.step(cyclesThisStep);
-        cycles += cyclesThisStep;
+
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            const cyclesThisStep = self.cpu.step();
+            self.ppu.step(cyclesThisStep);
+            cycles += cyclesThisStep;
+        }
+
         try self.debugger.evalBreakpoints();
     }
 }
