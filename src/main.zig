@@ -11,19 +11,22 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len != 3) {
-        std.debug.print("usage: yazge BOOT_ROM_PATH CARTRIDGE_ROM_PATH\n", .{});
+    if (args.len < 2) {
+        std.debug.print("usage: yazge CARTRIDGE_ROM_PATH [BOOT_ROM_PATH]\n", .{});
     }
 
     const dir = std.fs.cwd();
 
-    const boot_rom = try dir.readFileAlloc(allocator, args[1], 512);
-    defer allocator.free(boot_rom);
-
-    const cartridge_rom = try dir.readFileAlloc(allocator, args[2], 32768);
+    const cartridge_rom = try dir.readFileAlloc(allocator, args[1], 32768);
     defer allocator.free(cartridge_rom);
 
-    const gameboy = try Gameboy.init(allocator, boot_rom, cartridge_rom);
+    var boot_rom: ?[]u8 = null;
+    defer if (boot_rom) |rom| allocator.free(rom);
+    if (args.len > 2) {
+        boot_rom = try dir.readFileAlloc(allocator, args[2], 512);
+    }
+
+    const gameboy = try Gameboy.init(allocator, cartridge_rom, boot_rom);
     defer gameboy.deinit();
 
     try mainLoop(gameboy);

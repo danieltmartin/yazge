@@ -21,14 +21,14 @@ ppu: *PPU,
 debugger: *Debugger,
 mutex: std.Thread.Mutex,
 
-pub fn init(alloc: Allocator, boot_rom: []u8, cartridge_rom: []u8) !*Gameboy {
+pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
     const gameboy = try alloc.create(Gameboy);
     errdefer alloc.destroy(gameboy);
 
     const ppu = try PPU.init(alloc);
     errdefer ppu.deinit();
 
-    const mmu = try MMU.init(alloc, ppu, boot_rom, cartridge_rom);
+    const mmu = try MMU.init(alloc, ppu, cartridge_rom, boot_rom);
     errdefer mmu.deinit();
 
     const cpu = try CPU.init(alloc, mmu);
@@ -43,12 +43,14 @@ pub fn init(alloc: Allocator, boot_rom: []u8, cartridge_rom: []u8) !*Gameboy {
         .debugger = undefined,
     };
 
+    if (boot_rom == null) cpu.pc = 0x100;
+
     const debugger = try Debugger.init(alloc, gameboy);
     errdefer debugger.deinit();
 
     debugger.enabled = true;
-    try debugger.addBreakpoint(0x00fe);
-    try debugger.evalBreakpoints();
+    // try debugger.addBreakpoint(0x00fe);
+    // try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;
 

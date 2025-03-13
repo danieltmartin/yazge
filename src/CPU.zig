@@ -564,6 +564,10 @@ fn initPrefixedInstructions() [256]OpHandler {
     return instrs;
 }
 
-fn unhandled(_: *CPU) void {
-    std.debug.panic("unhandled opcode", .{});
+fn unhandled(cpu: *CPU) void {
+    if (cpu.prefixed) {
+        std.debug.panic("unhandled opcode: (prefix) 0x{x:0>2}", .{cpu.peekMem(cpu.pc - 1)});
+    } else {
+        std.debug.panic("unhandled opcode: 0x{x:0>2}", .{cpu.peekMem(cpu.pc - 1)});
+    }
 }
