@@ -10,6 +10,17 @@ const Mode = enum(u2) {
     drawing,
 };
 
+pub const LCDControl = packed struct {
+    bg_window_enable: bool,
+    obj_enable: bool,
+    obj_size: bool,
+    bg_tile_map: bool,
+    bg_window_addressing_mode: bool,
+    window_enable: bool,
+    window_tile_map: bool,
+    enable: bool,
+};
+
 const max_h_blank_duration = 376;
 const oam_scan_duration = 80;
 const min_drawing_duration = 172;
@@ -22,7 +33,9 @@ mode: Mode = .h_blank,
 dots: i32 = 0,
 last_draw_duration: i32 = 0,
 current_scanline: u8 = 0,
-enabled: bool = false,
+control: LCDControl = @bitCast(@as(u8, 0)),
+vram: [8192]u8 = undefined,
+framebuffer: [160][144]u2 = undefined,
 
 pub fn init(alloc: Allocator) !*PPU {
     const ppu = try alloc.create(PPU);
@@ -40,7 +53,7 @@ pub fn deinit(self: *PPU) void {
 }
 
 pub fn step(self: *PPU, cyclesSinceLastStep: u16) void {
-    if (!self.enabled) {
+    if (!self.control.enable) {
         return;
     }
     self.dots += cyclesSinceLastStep;
@@ -70,6 +83,14 @@ pub fn step(self: *PPU, cyclesSinceLastStep: u16) void {
             }
         },
         .drawing => {
+            for (0..cyclesSinceLastStep) |i| {
+                const offset: u16 = @intCast(i);
+                const x = (self.dots - cyclesSinceLastStep) + offset;
+                if (x >= 160) {
+                    break;
+                }
+                self.draw(@intCast(x));
+            }
             if (self.dots >= min_drawing_duration) {
                 // TODO these should vary based on various factors that can stall the draw.
                 self.dots -= min_drawing_duration;
@@ -80,15 +101,50 @@ pub fn step(self: *PPU, cyclesSinceLastStep: u16) void {
     }
 }
 
-pub fn setEnabled(self: *PPU, enabled: bool) void {
-    if (self.enabled == enabled) {
-        return;
+pub fn setControl(self: *PPU, control: LCDControl) void {
+    if (self.control.enable != control.enable) {
+        self.dots = 0;
+        self.last_draw_duration = 0;
+        self.current_scanline = 0;
+        self.mode = if (control.enable) .oam_scan else .h_blank;
     }
-    self.enabled = enabled;
-    self.dots = 0;
-    self.last_draw_duration = 0;
-    self.current_scanline = 0;
-    self.mode = if (enabled) .oam_scan else .h_blank;
+    self.control = control;
+}
+
+fn draw(self: *PPU, x: u8) void {
+    if (self.control.bg_window_enable) {
+        const y = self.current_scanline;
+        const tilemap_ref = self.get_tilemap_ref(x, y);
+        const tile_addr = self.get_tile_addr(tilemap_ref);
+        const tile_pixel = self.get_tile_pixel(tile_addr, (x % 8) + 8 * (y % 8));
+        self.framebuffer[x][y] = tile_pixel;
+    }
+}
+
+fn get_tilemap_ref(self: *PPU, x: u8, y: u8) u8 {
+    const tilemap: u16 = if (self.control.bg_tile_map) 0x9C00 else 0x9800;
+    const tilemap_x: u16 = x / 8;
+    const tilemap_y: u16 = y / 8;
+    const addr = tilemap + tilemap_x + 32 * tilemap_y;
+    return self.vram_read(addr);
+}
+
+fn get_tile_pixel(self: *PPU, tile_addr: u16, pixel: u8) u2 {
+    const lsb = self.vram_read(tile_addr + pixel / 4);
+    const msb = self.vram_read(tile_addr + pixel / 4 + 1);
+    const shift: u3 = @intCast(7 - (pixel % 8));
+    return @truncate(((lsb >> shift) & 1) | (((msb >> shift) & 1) << 1));
+}
+
+fn get_tile_addr(self: *PPU, tile_ref: u8) u16 {
+    return if (self.control.bg_window_addressing_mode)
+        @as(u16, 0x8000) + tile_ref
+    else
+        @intCast(@as(i32, 0x9000) + @as(i8, @bitCast(tile_ref)));
+}
+
+fn vram_read(self: *PPU, addr: u16) u8 {
+    return self.vram[addr - 0x8000];
 }
 
 const expectEqual = std.testing.expectEqual;

@@ -13,22 +13,14 @@ const disable_boot_rom = 0xFF50;
 const lcd_control = 0xFF40;
 const lcd_y_coordinate = 0xFF44;
 
-const LCDControl = packed struct {
-    enable: bool,
-    window_tile_map: bool,
-    window_enable: bool,
-    bg_window_addressing_mode: bool,
-    bg_tile_map_area: bool,
-    obj_size: bool,
-    obj_enable: bool,
-    bg_window_enable: bool,
-};
+const vram_start = 0x8000;
+const vram_end = 0x9FFF;
 
 alloc: Allocator,
 ppu: *PPU,
 boot_rom: []u8,
 boot_rom_mapped: bool = true,
-memory: [65536]u8 = std.mem.zeroes([65536]u8),
+memory: [65536]u8 = undefined,
 
 pub fn init(alloc: Allocator, ppu: *PPU, boot_rom: []u8, cartridge_rom: []u8) !*MMU {
     const mmu = try alloc.create(MMU);
@@ -63,10 +55,16 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
             self.boot_rom_mapped = val == 0;
         },
         lcd_control => {
-            const control: LCDControl = @bitCast(val);
-            self.ppu.enabled = control.enable;
+            const control: PPU.LCDControl = @bitCast(val);
+            self.ppu.setControl(control);
         },
-        else => self.memory[pointer] = val,
+        else => {
+            if (pointer >= vram_start and pointer <= vram_end) {
+                self.ppu.vram[pointer - vram_start] = val;
+            } else {
+                self.memory[pointer] = val;
+            }
+        },
     }
 }
 
@@ -76,6 +74,9 @@ pub fn readMem(self: *MMU, pointer: u16) u8 {
     }
     if (self.boot_rom_mapped and pointer <= self.boot_rom.len) {
         return self.boot_rom[pointer];
+    }
+    if (pointer >= vram_start and pointer <= vram_end) {
+        return self.ppu.vram[pointer - vram_start];
     }
     return self.memory[pointer];
 }

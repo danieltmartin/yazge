@@ -116,41 +116,42 @@ fn popPC(self: *CPU, t: anytype) t {
     }
 }
 
-pub fn dump(self: *CPU) void {
-    dumpReg("a", self.af.parts.a);
-    std.debug.print(", ", .{});
-    std.debug.print(", ", .{});
-    dumpReg("b", self.bc.parts.hi);
-    std.debug.print(", ", .{});
-    dumpReg("c", self.bc.parts.lo);
-    std.debug.print(", ", .{});
-    dumpReg("d", self.de.parts.hi);
-    std.debug.print(", ", .{});
-    dumpReg("e", self.de.parts.lo);
-    std.debug.print(", ", .{});
-    dumpReg("h", self.hl.parts.hi);
-    std.debug.print(", ", .{});
-    dumpReg("l", self.hl.parts.lo);
-    std.debug.print(", ", .{});
-    dumpReg("flag_z", self.af.parts.z);
-    std.debug.print(", ", .{});
-    dumpReg("flag_n", self.af.parts.n);
-    std.debug.print(", ", .{});
-    dumpReg("flag_h", self.af.parts.h);
-    std.debug.print(", ", .{});
-    dumpReg("flag_c", self.af.parts.c);
-    dumpReg("pc", self.pc);
-    std.debug.print(", ", .{});
-    dumpReg("sp", self.sp);
-    std.debug.print("\n", .{});
+pub fn dump(self: *CPU, writer: anytype) !void {
+    // TODO this is a monstrosity
+    try dumpReg(writer, "a", self.af.parts.a);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "b", self.bc.parts.hi);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "c", self.bc.parts.lo);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "d", self.de.parts.hi);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "e", self.de.parts.lo);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "h", self.hl.parts.hi);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "l", self.hl.parts.lo);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "flag_z", self.af.parts.z);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "flag_n", self.af.parts.n);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "flag_h", self.af.parts.h);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "flag_c", self.af.parts.c);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "pc", self.pc);
+    try writer.print(", ", .{});
+    try dumpReg(writer, "sp", self.sp);
+    try writer.print("\n", .{});
 }
 
-fn dumpReg(name: []const u8, value: anytype) void {
+fn dumpReg(writer: anytype, name: []const u8, value: anytype) !void {
     switch (@TypeOf(value)) {
-        u1 => std.debug.print("{s}={d}", .{ name, value }),
-        u8 => std.debug.print("{s}=${x:0>2}", .{ name, value }),
-        u16 => std.debug.print("{s}=${x:0>4}", .{ name, value }),
-        else => std.debug.print("{s}={d}", .{ name, value }),
+        u1 => try writer.print("{s}={d}", .{ name, value }),
+        u8 => try writer.print("{s}=${x:0>2}", .{ name, value }),
+        u16 => try writer.print("{s}=${x:0>4}", .{ name, value }),
+        else => try writer.print("{s}={d}", .{ name, value }),
     }
 }
 
@@ -404,16 +405,20 @@ fn sub_a_b(cpu: *CPU) void {
 }
 
 fn rla(cpu: *CPU) void {
+    const old_carry = cpu.af.parts.c;
     cpu.af.parts.c = @truncate(cpu.af.parts.a >> 7);
     cpu.af.parts.a <<= 1;
+    cpu.af.parts.a |= old_carry;
     cpu.af.parts.z = 0;
     cpu.af.parts.n = 0;
     cpu.af.parts.h = 0;
 }
 
 fn rl_c(cpu: *CPU) void {
+    const old_carry = cpu.af.parts.c;
     cpu.af.parts.c = @truncate(cpu.bc.parts.lo >> 7);
     cpu.bc.parts.lo <<= 1;
+    cpu.bc.parts.lo |= old_carry;
     cpu.af.parts.z = @intFromBool(cpu.bc.parts.lo == 0);
     cpu.af.parts.n = 0;
     cpu.af.parts.h = 0;

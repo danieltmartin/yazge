@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rl = @import("raylib");
 const Gameboy = @import("Gameboy.zig");
-const debug = @import("debug.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -31,17 +30,34 @@ pub fn main() !void {
 }
 
 fn mainLoop(gameboy: *Gameboy) !void {
-    rl.initWindow(Gameboy.screen_width, Gameboy.screen_height, "yazge");
+    rl.setTraceLogLevel(.err);
+    rl.initWindow(Gameboy.screen_width * 4, Gameboy.screen_height * 4, "yazge");
     defer rl.closeWindow();
 
     rl.setTargetFPS(Gameboy.fps);
 
+    const texture = try rl.loadRenderTexture(Gameboy.screen_width, Gameboy.screen_height);
+
     while (!rl.windowShouldClose()) {
         try gameboy.stepFrame();
+
+        rl.beginTextureMode(texture);
+        for (0..Gameboy.screen_width) |x| {
+            for (0..Gameboy.screen_height) |y| {
+                const color = switch (gameboy.ppu.framebuffer[x][y]) {
+                    0 => rl.Color.white,
+                    1 => rl.Color.light_gray,
+                    2 => rl.Color.dark_gray,
+                    3 => rl.Color.black,
+                };
+                rl.drawPixel(@intCast(x), @intCast(y), color);
+            }
+        }
+        rl.endTextureMode();
 
         rl.beginDrawing();
         defer rl.endDrawing();
 
-        rl.clearBackground(rl.Color.white);
+        rl.drawTextureEx(texture.texture, rl.Vector2.init(0, 0), 0, 4, rl.Color.white);
     }
 }
