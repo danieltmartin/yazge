@@ -164,7 +164,7 @@ test "cycle through modes" {
     defer ppu.deinit();
 
     try expectEqual(.h_blank, ppu.mode);
-    ppu.setEnabled(true);
+    ppu.control.enable = true;
 
     for (0..100) |_| {
         for (0..144) |scanline| {

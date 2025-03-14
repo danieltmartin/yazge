@@ -126,7 +126,6 @@ pub fn shouldStep(self: *Debugger) bool {
 
 pub fn evalBreakpoints(self: *Debugger) !void {
     if (self.stop_on_next or self.checkBreakpoint()) {
-        std.debug.print("BREAK\n", .{});
         self.mutex.lock();
         defer self.mutex.unlock();
 

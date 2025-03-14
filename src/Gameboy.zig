@@ -22,6 +22,7 @@ ppu: *PPU,
 cartridge: *Cartridge,
 debugger: *Debugger,
 mutex: std.Thread.Mutex,
+cycles_since_clock_increment: u64 = 0,
 
 pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enabled: bool) !*Gameboy {
     const gameboy = try alloc.create(Gameboy);
@@ -76,14 +77,47 @@ pub fn deinit(self: *Gameboy) void {
 }
 
 pub fn stepFrame(self: *Gameboy) !void {
-    var cycles: u32 = 0;
+    var cycles: u64 = 0;
     while (cycles < cycles_per_frame) {
-        if (!self.debugger.shouldStep()) return;
+        cycles += try self.step();
+    }
+}
 
-        const cyclesThisStep = self.cpu.step();
-        self.ppu.step(cyclesThisStep);
-        cycles += cyclesThisStep;
+pub fn step(self: *Gameboy) !u64 {
+    if (!self.debugger.shouldStep()) return 0;
 
-        try self.debugger.evalBreakpoints();
+    const cycles_this_step = self.cpu.step();
+    self.ppu.step(cycles_this_step);
+
+    self.triggerInterrupts(cycles_this_step);
+
+    try self.debugger.evalBreakpoints();
+
+    return cycles_this_step;
+}
+
+fn triggerInterrupts(self: *Gameboy, cycles_this_step: u64) void {
+    if (self.ppu.mode == .v_blank) {
+        self.mmu.requestInterrupt(.v_blank);
+    }
+
+    const timer_control = self.mmu.readTimerControl();
+
+    if (timer_control.enable) {
+        self.cycles_since_clock_increment += cycles_this_step;
+
+        const counter_increment_cycles = timer_control.tCycles();
+
+        if (self.cycles_since_clock_increment >= counter_increment_cycles) {
+            var timer_counter = self.mmu.readTimerCounter();
+            self.cycles_since_clock_increment = 0;
+            timer_counter, const overflowed = @addWithOverflow(timer_counter, 1);
+            if (overflowed == 1) {
+                self.mmu.writeTimerCounter(self.mmu.readTimerModulo());
+                self.mmu.requestInterrupt(.timer);
+            } else {
+                self.mmu.writeTimerCounter(timer_counter);
+            }
+        }
     }
 }

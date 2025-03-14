@@ -99,7 +99,8 @@ fn gameboyDoctorMode(gameboy: *Gameboy) !void {
     const cpu = gameboy.cpu;
 
     while (true) {
-        if (!cpu.prefixed) {
+        const just_interrupted = cpu.pc == 0x40 or cpu.pc == 0x48 or cpu.pc == 0x50 or cpu.pc == 0x58 or cpu.pc == 0x60;
+        if (!cpu.prefixed and !just_interrupted) {
             try writer.print("A:{X:0>2} F:{X:0>2} B:{X:0>2} C:{X:0>2} D:{X:0>2} E:{X:0>2} H:{X:0>2} L:{X:0>2} SP:{X:0>4} PC:{X:0>4} PCMEM:{X:0>2},{X:0>2},{X:0>2},{X:0>2}\n", .{
                 cpu.af.parts.a,
                 (@as(u8, cpu.af.parts.c) << 4) | (@as(u8, cpu.af.parts.h) << 5) | (@as(u8, cpu.af.parts.n) << 6) | (@as(u8, cpu.af.parts.z) << 7),

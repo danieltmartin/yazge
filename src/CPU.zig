@@ -12,6 +12,12 @@ const CPUError = error{
     ProgramCounterOutOfBounds,
 };
 
+const v_blank_interrupt_handler = 0x40;
+const lcd_interrupt_handler = 0x48;
+const timer_interrupt_handler = 0x50;
+const serial_interrupt_handler = 0x58;
+const joypad_interrupt_handler = 0x60;
+
 alloc: Allocator,
 
 // Registers
@@ -22,6 +28,7 @@ hl: Register = Register.init(),
 sp: u16 = 0,
 pc: u16 = 0,
 ime: bool = false,
+halted: bool = false,
 
 /// The MMU allows reading and writing to memory and I/O devices.
 mmu: *MMU,
@@ -51,6 +58,28 @@ pub fn deinit(self: *CPU) void {
 
 pub fn step(self: *CPU) u8 {
     self.cycles = 0;
+
+    if (self.ime) {
+        if (self.halted) {
+            self.halted = false;
+        }
+        if (self.mmu.nextInterrupt(true)) |interrupt_type| {
+            self.ime = false;
+            const handler_address: u16 = switch (interrupt_type) {
+                .v_blank => v_blank_interrupt_handler,
+                .lcd => lcd_interrupt_handler,
+                .timer => timer_interrupt_handler,
+                .serial => serial_interrupt_handler,
+                .joypad => joypad_interrupt_handler,
+            };
+            self.handleInterrupt(handler_address);
+            return self.cycles;
+        }
+    } else if (self.halted) {
+        if (self.mmu.nextInterrupt(false) != null) {
+            self.halted = false;
+        }
+    }
 
     const opcode = self.popPC(u8);
 
@@ -143,18 +172,18 @@ fn popPC(self: *CPU, t: anytype) t {
     switch (t) {
         u8 => {
             const val = self.readMem(self.pc);
-            self.pc += 1;
+            self.pc +%= 1;
             return val;
         },
         u16 => {
             const low = @as(u16, self.readMem(self.pc));
-            const high = @as(u16, self.readMem(self.pc + 1));
-            self.pc += 2;
+            const high = @as(u16, self.readMem(self.pc +% 1));
+            self.pc +%= 2;
             return (high << 8) | low;
         },
         i8 => {
             const val: i8 = @bitCast(self.readMem(self.pc));
-            self.pc += 1;
+            self.pc +%= 1;
             return val;
         },
         else => @compileError("invalid type"),
@@ -246,6 +275,12 @@ const AFRegister = extern union {
         return AFRegister{ .whole = 0 };
     }
 };
+
+fn handleInterrupt(cpu: *CPU, address: u16) void {
+    cpu.push_r16(&cpu.pc);
+    cpu.pc = address;
+    cpu.cycles += 12;
+}
 
 fn noop(_: *CPU) void {}
 
@@ -1255,6 +1290,10 @@ fn daa(cpu: *CPU) void {
     cpu.af.parts.h = 0;
 }
 
+fn halt(cpu: *CPU) void {
+    cpu.halted = true;
+}
+
 const instructions = initInstructions();
 const prefixed_instructions = initPrefixedInstructions();
 
@@ -1381,6 +1420,7 @@ fn initInstructions() [256]OpHandler {
     instrs[0x74] = ld_p_hl_r8(.h);
     instrs[0x75] = ld_p_hl_r8(.l);
     instrs[0x77] = ld_p_hl_r8(.a);
+    instrs[0x76] = halt;
     instrs[0x78] = ld_r8_r8(.a, .b);
     instrs[0x79] = ld_r8_r8(.a, .c);
     instrs[0x7A] = ld_r8_r8(.a, .d);
