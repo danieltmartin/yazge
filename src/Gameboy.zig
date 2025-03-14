@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const CPU = @import("CPU.zig");
 const MMU = @import("MMU.zig");
 const PPU = @import("PPU.zig");
+const Cartridge = @import("Cartridge.zig");
 const Debugger = @import("Debugger.zig");
 
 pub const screen_width = 160;
@@ -18,6 +19,7 @@ alloc: Allocator,
 cpu: *CPU,
 mmu: *MMU,
 ppu: *PPU,
+cartridge: *Cartridge,
 debugger: *Debugger,
 mutex: std.Thread.Mutex,
 
@@ -28,7 +30,10 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
     const ppu = try PPU.init(alloc);
     errdefer ppu.deinit();
 
-    const mmu = try MMU.init(alloc, ppu, cartridge_rom, boot_rom);
+    const cartridge = try Cartridge.init(alloc, cartridge_rom);
+    errdefer cartridge.deinit();
+
+    const mmu = try MMU.init(alloc, ppu, cartridge, boot_rom);
     errdefer mmu.deinit();
 
     const cpu = try CPU.init(alloc, mmu);
@@ -39,6 +44,7 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
         .cpu = cpu,
         .mmu = mmu,
         .ppu = ppu,
+        .cartridge = cartridge,
         .mutex = std.Thread.Mutex{},
         .debugger = undefined,
     };
@@ -58,6 +64,7 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
 }
 
 pub fn deinit(self: *Gameboy) void {
+    self.cartridge.deinit();
     self.cpu.deinit();
     self.mmu.deinit();
     self.ppu.deinit();

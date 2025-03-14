@@ -17,16 +17,19 @@ pub fn main() !void {
 
     const dir = std.fs.cwd();
 
-    const cartridge_rom = try dir.readFileAlloc(allocator, args[1], 32768);
-    defer allocator.free(cartridge_rom);
+    var gameboy: *Gameboy = undefined;
+    {
+        const cartridge_rom = try dir.readFileAlloc(allocator, args[1], 65536);
+        defer allocator.free(cartridge_rom);
 
-    var boot_rom: ?[]u8 = null;
-    defer if (boot_rom) |rom| allocator.free(rom);
-    if (args.len > 2) {
-        boot_rom = try dir.readFileAlloc(allocator, args[2], 512);
+        var boot_rom: ?[]u8 = null;
+        defer if (boot_rom) |rom| allocator.free(rom);
+        if (args.len > 2) {
+            boot_rom = try dir.readFileAlloc(allocator, args[2], 512);
+        }
+
+        gameboy = try Gameboy.init(allocator, cartridge_rom, boot_rom);
     }
-
-    const gameboy = try Gameboy.init(allocator, cartridge_rom, boot_rom);
     defer gameboy.deinit();
 
     try mainLoop(gameboy);
