@@ -943,6 +943,24 @@ fn di(cpu: *CPU) void {
     cpu.ime = false;
 }
 
+fn daa(cpu: *CPU) void {
+    var adjust: u8 = 0;
+    if (cpu.af.parts.n == 1) {
+        if (cpu.af.parts.h == 1) adjust += 0x06;
+        if (cpu.af.parts.c == 1) adjust += 0x60;
+        cpu.af.parts.a -%= adjust;
+    } else {
+        if (cpu.af.parts.h == 1 or cpu.af.parts.a & 0x0F > 0x09) adjust += 0x06;
+        if (cpu.af.parts.c == 1 or cpu.af.parts.a > 0x99) {
+            adjust += 0x60;
+            cpu.af.parts.c = 1;
+        }
+        cpu.af.parts.a +%= adjust;
+    }
+    cpu.af.parts.z = @intFromBool(cpu.af.parts.a == 0);
+    cpu.af.parts.h = 0;
+}
+
 const instructions = initInstructions();
 const prefixed_instructions = initPrefixedInstructions();
 
@@ -1145,6 +1163,7 @@ fn initInstructions() [256]OpHandler {
     instrs[0xF6] = or_a_n8;
     instrs[0xF8] = ld_hl_sp_plus_e8;
     instrs[0x07] = rlca;
+    instrs[0x27] = daa;
 
     return instrs;
 }
@@ -1171,7 +1190,7 @@ fn initPrefixedInstructions() [256]OpHandler {
     instrs[0x18] = rr_b;
     instrs[0x19] = rr_c;
     instrs[0x1A] = rr_d;
-    instrs[0x1B] = rr_c;
+    instrs[0x1B] = rr_e;
     instrs[0x1C] = rr_h;
     instrs[0x1D] = rr_l;
     instrs[0x2F] = sra_r8(.a);
