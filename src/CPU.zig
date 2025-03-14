@@ -211,7 +211,7 @@ fn writeMem(self: *CPU, pointer: u16, val: u8) void {
     self.mmu.writeMem(pointer, val);
 }
 
-fn readMem(self: *CPU, pointer: u16) u8 {
+pub fn readMem(self: *CPU, pointer: u16) u8 {
     self.cycles += 4;
     return self.mmu.readMem(pointer);
 }
@@ -235,11 +235,11 @@ const Register = extern union {
 const AFRegister = extern union {
     whole: u16,
     parts: packed struct {
-        z: u1,
-        n: u1,
-        h: u1,
+        padding: u4,
         c: u1,
-        _: u4,
+        h: u1,
+        n: u1,
+        z: u1,
         a: u8,
     },
     fn init() AFRegister {
@@ -262,6 +262,16 @@ fn ld_sp_n16(cpu: *CPU) void {
 
 fn ld_sp_hl(cpu: *CPU) void {
     cpu.sp = cpu.hl.whole;
+}
+
+fn ld_hl_sp_plus_e8(cpu: *CPU) void {
+    clearFlags(cpu);
+    const e8: i8 = @bitCast(cpu.popPC(u8));
+    const sp: i32 = @intCast(cpu.sp);
+    cpu.af.parts.h = @intFromBool(sp + (e8 & 0x0F) > 0x0F);
+    const result = @addWithOverflow(sp, e8);
+    cpu.hl.whole = @intCast(result[0]);
+    cpu.af.parts.c = result[1];
 }
 
 fn ld_a_p_a16(cpu: *CPU) void {
@@ -307,6 +317,13 @@ fn or_a_c(cpu: *CPU) void {
     clearFlags(cpu);
     cpu.op(.a).r8.* |= cpu.op(.c).r8.*;
     cpu.af.parts.z = @intFromBool(cpu.op(.a).r8.* == 0);
+}
+
+fn or_a_n8(cpu: *CPU) void {
+    clearFlags(cpu);
+    const n8 = cpu.popPC(u8);
+    cpu.af.parts.a |= n8;
+    cpu.af.parts.z = @intFromBool(cpu.af.parts.a == 0);
 }
 
 fn and_a_n8(cpu: *CPU) void {
@@ -469,16 +486,13 @@ fn inc_r8(name: OperandName) OpHandler {
     }.inc;
 }
 
-fn inc_bc(cpu: *CPU) void {
-    cpu.bc.whole +%= 1;
-}
-
-fn inc_de(cpu: *CPU) void {
-    cpu.de.whole +%= 1;
-}
-
-fn inc_hl(cpu: *CPU) void {
-    cpu.hl.whole +%= 1;
+fn inc_r16(name: OperandName) OpHandler {
+    return struct {
+        fn inc(cpu: *CPU) void {
+            const r16 = cpu.op(name).r16;
+            r16.* +%= 1;
+        }
+    }.inc;
 }
 
 fn dec_r8(cpu: *CPU, r8: *u8) void {
@@ -636,6 +650,14 @@ fn rl_r8(name: OperandName) OpHandler {
     }.rl;
 }
 
+fn rlca(cpu: *CPU) void {
+    clearFlags(cpu);
+    const msb = cpu.af.parts.a >> 7;
+    cpu.af.parts.a <<= 1;
+    cpu.af.parts.a |= msb;
+    cpu.af.parts.c = @truncate(msb);
+}
+
 fn rlc_r8(name: OperandName) OpHandler {
     return struct {
         fn rlc(cpu: *CPU) void {
@@ -651,12 +673,12 @@ fn rlc_r8(name: OperandName) OpHandler {
 }
 
 fn rr_r8(cpu: *CPU, r8: *u8) void {
-    clearFlags(cpu);
     const old_carry = cpu.af.parts.c;
+    clearFlags(cpu);
     cpu.af.parts.c = @truncate(r8.*);
     r8.* >>= 1;
     r8.* |= @as(u8, old_carry) << 7;
-    cpu.af.parts.z = @intFromBool(cpu.op(.c).r8.* == 0);
+    cpu.af.parts.z = @intFromBool(r8.* == 0);
 }
 
 fn rr_a(cpu: *CPU) void {
@@ -687,15 +709,29 @@ fn rr_l(cpu: *CPU) void {
     rr_r8(cpu, &cpu.op(.l).r8.*);
 }
 
-fn srl_r8(cpu: *CPU, r8: *u8) void {
-    clearFlags(cpu);
-    cpu.af.parts.c = @truncate(r8.*);
-    r8.* >>= 1;
-    cpu.af.parts.z = @intFromBool(r8.* == 0);
+fn srl_r8(name: OperandName) OpHandler {
+    return struct {
+        fn srl(cpu: *CPU) void {
+            const r8 = cpu.op(name).r8;
+            clearFlags(cpu);
+            cpu.af.parts.c = @truncate(r8.*);
+            r8.* >>= 1;
+            cpu.af.parts.z = @intFromBool(r8.* == 0);
+        }
+    }.srl;
 }
 
-fn srl_b(cpu: *CPU) void {
-    srl_r8(cpu, &cpu.op(.b).r8.*);
+fn swap_r8(name: OperandName) OpHandler {
+    return struct {
+        fn swap(cpu: *CPU) void {
+            const r8 = cpu.op(name).r8;
+            clearFlags(cpu);
+            const lsb = r8.* & 0x0F;
+            r8.* >>= 4;
+            r8.* |= lsb << 4;
+            cpu.af.parts.z = @intFromBool(r8.* == 0);
+        }
+    }.swap;
 }
 
 fn sra_r8(name: OperandName) OpHandler {
@@ -764,7 +800,7 @@ fn push_hl(cpu: *CPU) void {
 }
 
 fn pop_r16(cpu: *CPU, r16: *u16) void {
-    r16.* = (r16.* & 0xFF00) | cpu.readMem(cpu.sp);
+    r16.* = cpu.readMem(cpu.sp);
     cpu.sp += 1;
     r16.* = (r16.* & 0x00FF) | (@as(u16, cpu.readMem(cpu.sp)) << 8);
     cpu.sp += 1;
@@ -772,6 +808,7 @@ fn pop_r16(cpu: *CPU, r16: *u16) void {
 
 fn pop_af(cpu: *CPU) void {
     pop_r16(cpu, &cpu.af.whole);
+    cpu.af.parts.padding = 0;
 }
 
 fn pop_bc(cpu: *CPU) void {
@@ -898,6 +935,10 @@ fn ret_z(cpu: *CPU) void {
     ret_cc(cpu, cpu.af.parts.z == 1);
 }
 
+fn ei(cpu: *CPU) void {
+    cpu.ime = true;
+}
+
 fn di(cpu: *CPU) void {
     cpu.ime = false;
 }
@@ -912,7 +953,6 @@ fn initInstructions() [256]OpHandler {
 
     instrs[0x00] = noop;
     instrs[0x31] = ld_sp_n16;
-    instrs[0xAF] = xor_r8_r8(.a, .a);
     instrs[0x21] = ld_hl_n16;
     instrs[0x32] = ld_p_hld_a;
     instrs[0xCB] = prefix;
@@ -937,9 +977,9 @@ fn initInstructions() [256]OpHandler {
     instrs[0xC1] = pop_bc;
     instrs[0x05] = dec_b;
     instrs[0x22] = ld_p_hli_a;
-    instrs[0x23] = inc_hl;
+    instrs[0x23] = inc_r16(.hl);
     instrs[0xC9] = ret;
-    instrs[0x13] = inc_de;
+    instrs[0x13] = inc_r16(.de);
     instrs[0xFE] = cp_a_n8;
     instrs[0xEA] = ld_p_a16_a;
     instrs[0x3D] = dec_a;
@@ -958,15 +998,23 @@ fn initInstructions() [256]OpHandler {
     instrs[0x47] = ld_r8_r8(.b, .a);
     instrs[0x2A] = ld_a_p_hli;
     instrs[0x12] = ld_p_de_a;
+    instrs[0xFB] = ei;
     instrs[0xF3] = di;
     instrs[0xE5] = push_hl;
     instrs[0xE1] = pop_hl;
     instrs[0xF5] = push_af;
     instrs[0xF1] = pop_af;
     instrs[0x01] = ld_bc_n16;
-    instrs[0x03] = inc_bc;
+    instrs[0x03] = inc_r16(.bc);
+    instrs[0x33] = inc_r16(.sp);
     instrs[0x02] = ld_p_bc_a;
+    instrs[0xAF] = xor_r8_r8(.a, .a);
+    instrs[0xA8] = xor_r8_r8(.a, .b);
+    instrs[0xA9] = xor_r8_r8(.a, .c);
     instrs[0xAA] = xor_r8_r8(.a, .d);
+    instrs[0xAB] = xor_r8_r8(.a, .e);
+    instrs[0xAC] = xor_r8_r8(.a, .h);
+    instrs[0xAD] = xor_r8_r8(.a, .l);
     instrs[0xD6] = sub_a_n8;
     instrs[0x30] = jr_nc_e8;
     instrs[0x1F] = rra;
@@ -1094,6 +1142,9 @@ fn initInstructions() [256]OpHandler {
     instrs[0x93] = sub_a_r8(.e);
     instrs[0x94] = sub_a_r8(.h);
     instrs[0x95] = sub_a_r8(.l);
+    instrs[0xF6] = or_a_n8;
+    instrs[0xF8] = ld_hl_sp_plus_e8;
+    instrs[0x07] = rlca;
 
     return instrs;
 }
@@ -1109,7 +1160,13 @@ fn initPrefixedInstructions() [256]OpHandler {
     instrs[0x13] = rl_r8(.e);
     instrs[0x14] = rl_r8(.h);
     instrs[0x15] = rl_r8(.l);
-    instrs[0x38] = srl_b;
+    instrs[0x3F] = srl_r8(.a);
+    instrs[0x38] = srl_r8(.b);
+    instrs[0x39] = srl_r8(.c);
+    instrs[0x3A] = srl_r8(.d);
+    instrs[0x3B] = srl_r8(.e);
+    instrs[0x3C] = srl_r8(.h);
+    instrs[0x3D] = srl_r8(.l);
     instrs[0x1F] = rr_a;
     instrs[0x18] = rr_b;
     instrs[0x19] = rr_c;
@@ -1131,6 +1188,13 @@ fn initPrefixedInstructions() [256]OpHandler {
     instrs[0x03] = rlc_r8(.e);
     instrs[0x04] = rlc_r8(.h);
     instrs[0x05] = rlc_r8(.l);
+    instrs[0x37] = swap_r8(.a);
+    instrs[0x30] = swap_r8(.b);
+    instrs[0x31] = swap_r8(.c);
+    instrs[0x32] = swap_r8(.d);
+    instrs[0x33] = swap_r8(.e);
+    instrs[0x34] = swap_r8(.h);
+    instrs[0x35] = swap_r8(.l);
 
     return instrs;
 }

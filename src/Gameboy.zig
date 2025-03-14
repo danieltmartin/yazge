@@ -23,7 +23,7 @@ cartridge: *Cartridge,
 debugger: *Debugger,
 mutex: std.Thread.Mutex,
 
-pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
+pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enabled: bool) !*Gameboy {
     const gameboy = try alloc.create(Gameboy);
     errdefer alloc.destroy(gameboy);
 
@@ -51,11 +51,14 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8) !*Gameboy {
 
     if (boot_rom == null) cpu.pc = 0x100;
 
-    const debugger = try Debugger.init(alloc, gameboy);
+    const debugger = try Debugger.init(alloc, gameboy, debug_enabled);
     errdefer debugger.deinit();
 
-    debugger.enabled = true;
-    try debugger.addBreakpoint(0x0000);
+    if (boot_rom == null) {
+        try debugger.addBreakpoint(0x0100);
+    } else {
+        try debugger.addBreakpoint(0x0000);
+    }
     try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;
@@ -77,14 +80,9 @@ pub fn stepFrame(self: *Gameboy) !void {
     while (cycles < cycles_per_frame) {
         if (!self.debugger.shouldStep()) return;
 
-        {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            const cyclesThisStep = self.cpu.step();
-            self.ppu.step(cyclesThisStep);
-            cycles += cyclesThisStep;
-        }
+        const cyclesThisStep = self.cpu.step();
+        self.ppu.step(cyclesThisStep);
+        cycles += cyclesThisStep;
 
         try self.debugger.evalBreakpoints();
     }

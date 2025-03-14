@@ -35,25 +35,26 @@ paused: bool = false,
 mutex: std.Thread.Mutex,
 stopping: std.atomic.Value(bool),
 
-pub fn init(alloc: Allocator, gameboy: *Gameboy) !*Debugger {
+pub fn init(alloc: Allocator, gameboy: *Gameboy, enabled: bool) !*Debugger {
     const debugger = try alloc.create(Debugger);
     errdefer alloc.destroy(debugger);
 
     const out = std.io.getStdOut();
-    const bufOut = std.io.bufferedWriter(out.writer());
+    const buf_out = std.io.bufferedWriter(out.writer());
 
     const in = std.io.getStdIn();
     const bufIn = std.io.bufferedReader(in.reader());
 
     debugger.* = .{
         .alloc = alloc,
-        .buf_out = bufOut,
+        .buf_out = buf_out,
         .out_mutex = std.Thread.Mutex{},
         .buf_in = bufIn,
         .breakpoints = std.AutoHashMap(u16, void).init(alloc),
         .gameboy = gameboy,
         .mutex = std.Thread.Mutex{},
         .stopping = std.atomic.Value(bool).init(false),
+        .enabled = enabled,
     };
 
     debugger.debugger_thread = try std.Thread.spawn(.{}, replLoop, .{debugger});
@@ -69,6 +70,7 @@ pub fn deinit(self: *Debugger) void {
 }
 
 pub fn replLoop(self: *Debugger) !void {
+    if (!self.enabled) return;
     while (!self.stopping.load(.monotonic)) {
         try self.printPrompt();
 
@@ -124,6 +126,7 @@ pub fn shouldStep(self: *Debugger) bool {
 
 pub fn evalBreakpoints(self: *Debugger) !void {
     if (self.stop_on_next or self.checkBreakpoint()) {
+        std.debug.print("BREAK\n", .{});
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -259,7 +262,7 @@ pub fn printLCDState(self: *Debugger) void {
     defer self.gameboy.mutex.unlock();
     const ppu = self.gameboy.ppu;
     std.debug.print(
-        \\LCD Control register:
+        \\LCD Control register: ${x:0>2}
         \\  LCD Enabled: {}
         \\  Background and Window enabled: {}
         \\  Objects enabled: {}
@@ -274,6 +277,7 @@ pub fn printLCDState(self: *Debugger) void {
         \\  Scanline: {d}
         \\
     , .{
+        @as(u8, @bitCast(ppu.control)),
         ppu.control.enable,
         ppu.control.bg_window_enable,
         ppu.control.obj_enable,

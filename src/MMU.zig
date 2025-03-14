@@ -28,6 +28,7 @@ boot_rom: ?[]u8 = null,
 boot_rom_mapped: bool = false,
 memory: [65536]u8 = undefined,
 cartridge: *Cartridge,
+fix_y_coordinate: bool = false,
 
 pub fn init(alloc: Allocator, ppu: *PPU, cartridge: *Cartridge, boot_rom: ?[]u8) !*MMU {
     const mmu = try alloc.create(MMU);
@@ -86,6 +87,9 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
 
 pub fn readMem(self: *MMU, pointer: u16) u8 {
     if (pointer == lcd_y_coordinate) {
+        if (self.fix_y_coordinate) {
+            return 0x90;
+        }
         return self.ppu.current_scanline;
     }
     if (pointer == scroll_x) {
