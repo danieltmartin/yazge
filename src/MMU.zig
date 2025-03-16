@@ -16,6 +16,7 @@ const lcd_y_coordinate = 0xFF44;
 const scroll_y = 0xFF42;
 const scroll_x = 0xFF43;
 const rom_bank_number = 0x2000;
+const dma_oam_transfer = 0xFF46;
 
 const cartridge_end = 0x7FFF;
 const vram_start = 0x8000;
@@ -37,21 +38,29 @@ alloc: Allocator,
 ppu: *PPU,
 boot_rom: ?[]u8 = null,
 boot_rom_mapped: bool = false,
-memory: [65536]u8 = [_]u8{0} ** 65536,
+memory: *[64 * 1024]u8,
 cartridge: *Cartridge,
 fix_y_coordinate: bool = false,
 
-pub fn init(alloc: Allocator, ppu: *PPU, cartridge: *Cartridge, boot_rom: ?[]u8) !*MMU {
+const Config = struct {
+    memory: *[64 * 1024]u8,
+    ppu: *PPU,
+    cartridge: *Cartridge,
+    boot_rom: ?[]u8,
+};
+
+pub fn init(alloc: Allocator, config: Config) !*MMU {
     const mmu = try alloc.create(MMU);
     errdefer alloc.destroy(mmu);
 
     mmu.* = .{
         .alloc = alloc,
-        .ppu = ppu,
-        .cartridge = cartridge,
+        .memory = config.memory,
+        .ppu = config.ppu,
+        .cartridge = config.cartridge,
     };
 
-    if (boot_rom) |rom| {
+    if (mmu.boot_rom) |rom| {
         if (rom.len != 256) {
             return MMUError.InvalidBootROMSize;
         }
@@ -87,6 +96,13 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
         },
         rom_bank_number => {
             self.cartridge.setBankNumber(val);
+        },
+        dma_oam_transfer => {
+            const start: u16 = @as(u16, val) << 8;
+            // TODO this needs to take the appropriate number of cycles.
+            // For now this may be ok because games typically wait the number of cycles
+            // the DMA transfer takes anyway.
+            @memcpy(self.memory[0xFE00..0xFEA0], self.memory[start .. start + 160]);
         },
         else => {
             if (pointer >= vram_start and pointer <= vram_end) {

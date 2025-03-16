@@ -14,8 +14,10 @@ pub const screen_height = 144;
 pub const fps = 60;
 const gameboy_cpu_freq = 4194304;
 const cycles_per_frame = gameboy_cpu_freq / fps;
+const memory_map_size = 64 * 1024;
 
 alloc: Allocator,
+memory: *[memory_map_size]u8,
 cpu: *CPU,
 mmu: *MMU,
 ppu: *PPU,
@@ -28,13 +30,24 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
     const gameboy = try alloc.create(Gameboy);
     errdefer alloc.destroy(gameboy);
 
-    const ppu = try PPU.init(alloc);
+    const memory = try alloc.create([memory_map_size]u8);
+    errdefer alloc.free(memory);
+
+    const ppu = try PPU.init(alloc, .{
+        .vram = memory[0x8000..0xA000],
+        .oam = memory[0xFE00..0xFEA0],
+    });
     errdefer ppu.deinit();
 
     const cartridge = try Cartridge.init(alloc, cartridge_rom);
     errdefer cartridge.deinit();
 
-    const mmu = try MMU.init(alloc, ppu, cartridge, boot_rom);
+    const mmu = try MMU.init(alloc, .{
+        .memory = memory,
+        .ppu = ppu,
+        .cartridge = cartridge,
+        .boot_rom = boot_rom,
+    });
     errdefer mmu.deinit();
 
     const cpu = try CPU.init(alloc, mmu);
@@ -42,6 +55,7 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
 
     gameboy.* = .{
         .alloc = alloc,
+        .memory = memory,
         .cpu = cpu,
         .mmu = mmu,
         .ppu = ppu,
@@ -55,12 +69,12 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
     const debugger = try Debugger.init(alloc, gameboy, debug_enabled);
     errdefer debugger.deinit();
 
-    if (boot_rom == null) {
-        try debugger.addBreakpoint(0x0100);
-    } else {
-        try debugger.addBreakpoint(0x0000);
-    }
-    try debugger.evalBreakpoints();
+    // if (boot_rom == null) {
+    //     try debugger.addBreakpoint(0x0100);
+    // } else {
+    //     try debugger.addBreakpoint(0x0000);
+    // }
+    // try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;
 
@@ -68,6 +82,7 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
 }
 
 pub fn deinit(self: *Gameboy) void {
+    self.alloc.free(self.memory);
     self.cartridge.deinit();
     self.cpu.deinit();
     self.mmu.deinit();
@@ -87,7 +102,9 @@ pub fn step(self: *Gameboy) !u64 {
     if (!self.debugger.shouldStep()) return 0;
 
     const cycles_this_step = self.cpu.step();
-    self.ppu.step(cycles_this_step);
+    for (0..cycles_this_step) |_| {
+        self.ppu.step();
+    }
 
     self.triggerInterrupts(cycles_this_step);
 

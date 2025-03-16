@@ -13,7 +13,7 @@ const Mode = enum(u2) {
 pub const LCDControl = packed struct {
     bg_window_enable: bool,
     obj_enable: bool,
-    obj_size: bool,
+    obj_size: u1,
     bg_tile_map: bool,
     bg_window_addressing_mode: bool,
     window_enable: bool,
@@ -21,32 +21,66 @@ pub const LCDControl = packed struct {
     enable: bool,
 };
 
+const ObjectAttributes = packed struct {
+    y_position: u8 = 0,
+    x_position: u8 = 0,
+    tile_index: u8 = 0,
+    cgb_palette: u3 = 0,
+    bank: u1 = 0,
+    dmg_palette: u1 = 0,
+    x_flip: bool = false,
+    y_flip: bool = false,
+    priority: u1 = 0,
+};
+
+const vram_size = 8 * 1024;
+const oam_size = 40;
+
 const max_h_blank_duration = 376;
 const oam_scan_duration = 80;
 const min_drawing_duration = 172;
 const v_blank_line_duration = 456;
 const max_horizontal_line = 143;
 const num_v_blank_scanlines = 10;
+const max_objects_per_scanline = 10;
+
+const tile_map_0 = 0x9800;
+const tile_map_1 = 0x9C00;
+const tile_block_0 = 0x8000;
+const tile_block_1 = 0x8800;
+const tile_block_2 = 0x9000;
 
 alloc: Allocator,
 mode: Mode = .h_blank,
-dots: i32 = 0,
+dots: u16 = 0,
 last_draw_duration: i32 = 0,
 current_scanline: u8 = 0,
 x: u8 = 0,
 control: LCDControl = @bitCast(@as(u8, 0)),
-vram: [8192]u8 = undefined,
+vram: *[vram_size]u8,
+oam: *[oam_size]ObjectAttributes,
 framebuffer: [160][144]u2 = undefined,
 scroll_x: u8 = 0,
 scroll_y: u8 = 0,
+object_buffer: [max_objects_per_scanline]u16 = [_]u16{0} ** max_objects_per_scanline,
+visible_objects: []u16 = undefined,
 
-pub fn init(alloc: Allocator) !*PPU {
+const Config = struct {
+    vram: *[8 * 1024]u8,
+    oam: *[160]u8,
+};
+
+pub fn init(alloc: Allocator, config: Config) !*PPU {
     const ppu = try alloc.create(PPU);
     errdefer alloc.destroy(ppu);
 
     ppu.* = .{
         .alloc = alloc,
+        .vram = config.vram,
+        .oam = @ptrCast(@alignCast(config.oam)),
     };
+
+    ppu.visible_objects = ppu.object_buffer[0..0];
 
     return ppu;
 }
@@ -55,23 +89,23 @@ pub fn deinit(self: *PPU) void {
     self.alloc.destroy(self);
 }
 
-pub fn step(self: *PPU, cyclesSinceLastStep: u16) void {
+pub fn step(self: *PPU) void {
     if (!self.control.enable) {
         return;
     }
-    self.dots += cyclesSinceLastStep;
+    self.dots += 1;
 
     switch (self.mode) {
         .h_blank => {
             if (self.dots >= max_h_blank_duration - self.last_draw_duration) {
-                self.dots -= max_h_blank_duration - self.last_draw_duration;
+                self.dots = 0;
                 self.current_scanline += 1;
                 self.mode = if (self.current_scanline > max_horizontal_line) .v_blank else .oam_scan;
             }
         },
         .v_blank => {
             if (self.dots >= v_blank_line_duration) {
-                self.dots -= v_blank_line_duration;
+                self.dots = 0;
                 self.current_scanline += 1;
                 if (self.current_scanline > max_horizontal_line + num_v_blank_scanlines) {
                     self.current_scanline = 0;
@@ -80,23 +114,24 @@ pub fn step(self: *PPU, cyclesSinceLastStep: u16) void {
             }
         },
         .oam_scan => {
+            self.scan();
             if (self.dots >= oam_scan_duration) {
-                self.dots -= oam_scan_duration;
+                self.dots = 0;
                 self.mode = .drawing;
                 self.x = 0;
             }
         },
         .drawing => {
-            for (0..cyclesSinceLastStep) |_| {
-                if (self.x >= 160) break;
-                self.draw(self.x);
+            if (self.x < 160) {
+                self.draw(self.x, self.current_scanline);
                 self.x += 1;
             }
             if (self.dots >= min_drawing_duration) {
                 // TODO these should vary based on various factors that can stall the draw.
-                self.dots -= min_drawing_duration;
+                self.dots = 0;
                 self.last_draw_duration = min_drawing_duration;
                 self.mode = .h_blank;
+                self.visible_objects = self.object_buffer[0..0];
             }
         },
     }
@@ -112,11 +147,31 @@ pub fn setControl(self: *PPU, control: LCDControl) void {
     self.control = control;
 }
 
-fn draw(self: *PPU, x: u8) void {
+fn scan(self: *PPU) void {
+    if (self.dots & 1 == 1 or self.visible_objects.len == max_objects_per_scanline) {
+        return;
+    }
+    const obj_index = (self.dots >> 1) - 1;
+    const object = self.oam[@intCast(obj_index)];
+    const screen_y_position = @as(i16, object.y_position) - 16;
+    const height = 8 + 8 * @as(u8, self.control.obj_size);
+    if (self.current_scanline >= screen_y_position and
+        self.current_scanline < screen_y_position + height)
+    {
+        self.visible_objects = self.object_buffer[0 .. self.visible_objects.len + 1];
+        self.visible_objects[self.visible_objects.len - 1] = obj_index;
+    }
+}
+
+fn draw(self: *PPU, x: u8, y: u8) void {
+    if (self.control.obj_enable) {
+        if (self.drawObject(x, y)) return;
+    }
+
     if (!self.control.bg_window_enable) {
         return;
     }
-    const y = self.current_scanline;
+
     const scroll_x = x +% self.scroll_x;
     const scroll_y = y +% self.scroll_y;
     const tilemap_addr = self.get_tilemap_addr(scroll_x, scroll_y);
@@ -128,18 +183,53 @@ fn draw(self: *PPU, x: u8) void {
     self.framebuffer[x][y] = tile_pixel;
 }
 
+fn drawObject(self: *PPU, x: u8, y: u8) bool {
+    var obj = ObjectAttributes{};
+    var lowest_x_coord: u8 = std.math.maxInt(u8);
+    for (self.visible_objects) |obj_index| {
+        const candidate_obj = self.oam[obj_index];
+        if (candidate_obj.x_position <= 7 or candidate_obj.x_position >= 167) {
+            continue;
+        }
+        const screen_x = candidate_obj.x_position - 8;
+        if (self.x >= screen_x and self.x < screen_x + 8 and
+            candidate_obj.x_position < lowest_x_coord)
+        {
+            lowest_x_coord = obj.x_position;
+            obj = candidate_obj;
+        }
+    }
+
+    if (obj.x_position == 0) {
+        return false;
+    }
+
+    const tile_addr = get_object_tile_addr(obj.tile_index);
+    const screen_x = obj.x_position - 16;
+    const screen_y = obj.y_position - 16;
+    const tile_x = (x - screen_x) % 8;
+    const tile_y = (y - screen_y) % 8;
+    const tile_pixel = self.get_tile_pixel(tile_addr, tile_x, tile_y);
+    self.framebuffer[x][y] = tile_pixel;
+    return true;
+}
+
 fn get_tilemap_addr(self: *PPU, x: u8, y: u8) u16 {
-    const tilemap: u16 = if (self.control.bg_tile_map) 0x9C00 else 0x9800;
+    const tilemap: u16 = if (self.control.bg_tile_map) tile_map_1 else tile_map_0;
     const tilemap_x: u16 = x / 8;
     const tilemap_y: u16 = y / 8;
     return tilemap + tilemap_x + 32 * tilemap_y;
 }
 
+fn get_object_tile_addr(tile_number: u8) u16 {
+    return @as(u16, tile_block_0) + 16 * @as(u16, tile_number);
+}
+
 fn get_tile_addr(self: *PPU, tile_number: u8) u16 {
     return if (self.control.bg_window_addressing_mode)
-        @as(u16, 0x8000) + 16 * @as(u16, tile_number)
+        @as(u16, tile_block_0) + 16 * @as(u16, tile_number)
     else
-        @intCast(@as(i32, 0x9000) + 16 * @as(i16, @as(i8, @bitCast(tile_number))));
+        @intCast(@as(i32, tile_block_2) + 16 * @as(i16, @as(i8, @bitCast(tile_number))));
 }
 
 fn get_tile_pixel(self: *PPU, tile_addr: u16, x: u8, y: u8) u2 {

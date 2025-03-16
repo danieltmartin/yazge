@@ -11,6 +11,7 @@ const Command = union(enum) {
     Continue,
     Step,
     PrintVRam,
+    PrintOam,
     AddBreakpoint: struct {
         address: u16,
     },
@@ -97,6 +98,7 @@ pub fn replLoop(self: *Debugger) !void {
                 self.stop_on_next = true;
             },
             .PrintVRam => self.printVram(),
+            .PrintOam => self.printOam(),
             .AddBreakpoint => |b| try self.addBreakpoint(b.address),
             .DeleteBreakpoint => |b| try self.deleteBreakpoint(b.address),
             .PrintCPUState => try self.printCPUState(),
@@ -162,6 +164,8 @@ fn parseCommand(command: []const u8) !Command {
         return .Step;
     } else if (std.mem.eql(u8, command, "vram")) {
         return .PrintVRam;
+    } else if (std.mem.eql(u8, command, "oam")) {
+        return .PrintOam;
     } else if (std.mem.eql(u8, command, "cpu")) {
         return .PrintCPUState;
     } else if (std.mem.eql(u8, command, "lcd")) {
@@ -242,6 +246,23 @@ pub fn printVram(self: *Debugger) void {
     std.debug.print("\n", .{});
 }
 
+pub fn printOam(self: *Debugger) void {
+    self.gameboy.mutex.lock();
+    defer self.gameboy.mutex.unlock();
+    for (self.gameboy.ppu.oam, 0..) |obj, i| {
+        std.debug.print("{d}: x={d} y={d} tile_index={d} bank={d} dmg_palette={d} priority={d}\n", .{
+            i,
+            obj.y_position,
+            obj.x_position,
+            obj.tile_index,
+            obj.bank,
+            obj.dmg_palette,
+            obj.priority,
+        });
+    }
+    std.debug.print("\n", .{});
+}
+
 pub fn printCPUState(self: *Debugger) !void {
     self.gameboy.mutex.lock();
     defer self.gameboy.mutex.unlock();
@@ -281,7 +302,7 @@ pub fn printLCDState(self: *Debugger) void {
         ppu.control.bg_window_enable,
         ppu.control.obj_enable,
         ppu.control.window_enable,
-        if (ppu.control.obj_size) "8x16" else "8x8",
+        if (ppu.control.obj_size == 1) "8x16" else "8x8",
         if (ppu.control.bg_tile_map) "$9C00" else "$9800",
         if (ppu.control.window_tile_map) "$9C00" else "$9800",
         if (ppu.control.bg_window_addressing_mode) "$8000+[0,127]" else "$9000+[-128,127]",
