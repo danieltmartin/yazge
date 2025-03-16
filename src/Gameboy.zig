@@ -8,6 +8,7 @@ const MMU = @import("MMU.zig");
 const PPU = @import("PPU.zig");
 const Cartridge = @import("Cartridge.zig");
 const Debugger = @import("Debugger.zig");
+const Input = @import("common.zig").Input;
 
 pub const screen_width = 160;
 pub const screen_height = 144;
@@ -91,15 +92,17 @@ pub fn deinit(self: *Gameboy) void {
     self.alloc.destroy(self);
 }
 
-pub fn stepFrame(self: *Gameboy) !void {
+pub fn stepFrame(self: *Gameboy, input: Input) !void {
     var cycles: u64 = 0;
     while (cycles < cycles_per_frame) {
-        cycles += try self.step();
+        cycles += try self.step(input);
     }
 }
 
-pub fn step(self: *Gameboy) !u64 {
+pub fn step(self: *Gameboy, input: Input) !u64 {
     if (!self.debugger.shouldStep()) return 0;
+
+    self.mmu.input = input;
 
     const cycles_this_step = self.cpu.step();
     for (0..cycles_this_step) |_| {

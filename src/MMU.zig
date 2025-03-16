@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const PPU = @import("PPU.zig");
 const Cartridge = @import("Cartridge.zig");
+const Input = @import("common.zig").Input;
 
 pub const MMUError = error{
     InvalidBootROMSize,
@@ -17,6 +18,7 @@ const scroll_y = 0xFF42;
 const scroll_x = 0xFF43;
 const rom_bank_number = 0x2000;
 const dma_oam_transfer = 0xFF46;
+const joypad = 0xFF00;
 
 const cartridge_end = 0x7FFF;
 const vram_start = 0x8000;
@@ -41,6 +43,7 @@ boot_rom_mapped: bool = false,
 memory: *[64 * 1024]u8,
 cartridge: *Cartridge,
 fix_y_coordinate: bool = false,
+input: Input = .{},
 
 const Config = struct {
     memory: *[64 * 1024]u8,
@@ -77,7 +80,7 @@ pub fn deinit(self: *MMU) void {
     self.alloc.destroy(self);
 }
 
-pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
+pub fn write(self: *MMU, pointer: u16, val: u8) void {
     switch (pointer) {
         disable_boot_rom => {
             if (val != 0) {
@@ -104,6 +107,10 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
             // the DMA transfer takes anyway.
             @memcpy(self.memory[0xFE00..0xFEA0], self.memory[start .. start + 160]);
         },
+        joypad => {
+            // Mask out lower nibble; it's read-only.
+            self.memory[joypad] = val & 0xF0;
+        },
         else => {
             if (pointer >= vram_start and pointer <= vram_end) {
                 self.ppu.vram[pointer - vram_start] = val;
@@ -116,7 +123,7 @@ pub fn writeMem(self: *MMU, pointer: u16, val: u8) void {
     }
 }
 
-pub fn readMem(self: *MMU, pointer: u16) u8 {
+pub fn read(self: *MMU, pointer: u16) u8 {
     if (pointer == lcd_y_coordinate) {
         if (self.fix_y_coordinate) {
             return 0x90;
@@ -129,7 +136,9 @@ pub fn readMem(self: *MMU, pointer: u16) u8 {
     if (pointer == scroll_y) {
         return self.ppu.scroll_y;
     }
-
+    if (pointer == joypad) {
+        return self.readInput();
+    }
     if (self.boot_rom_mapped and pointer <= self.boot_rom.?.len) {
         return self.boot_rom.?[pointer];
     }
@@ -209,6 +218,17 @@ pub fn readTimerControl(self: *MMU) TimerControl {
 
 pub fn readTimerModulo(self: *MMU) u8 {
     return self.memory[timer_modulo];
+}
+
+pub fn readInput(self: *MMU) u8 {
+    const current = self.memory[joypad];
+    if (current & 0b00100000 == 0) {
+        return (current & 0xF0) | self.input.toButtons();
+    } else if (current & 0b00010000 == 0) {
+        return (current & 0xF0) | self.input.toDPad();
+    } else {
+        return current | 0x0F;
+    }
 }
 
 fn clearInterrupt(self: *MMU, interrupt_type: InterruptType) void {

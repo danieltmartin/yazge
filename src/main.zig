@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rl = @import("raylib");
 const Gameboy = @import("Gameboy.zig");
+const Input = @import("common.zig").Input;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -59,7 +60,17 @@ fn mainLoop(gameboy: *Gameboy) !void {
     const texture = try rl.loadRenderTexture(Gameboy.screen_width, Gameboy.screen_height);
 
     while (!rl.windowShouldClose()) {
-        try gameboy.stepFrame();
+        const input = Input{
+            .right = rl.isKeyDown(rl.KeyboardKey.right),
+            .left = rl.isKeyDown(rl.KeyboardKey.left),
+            .up = rl.isKeyDown(rl.KeyboardKey.up),
+            .down = rl.isKeyDown(rl.KeyboardKey.down),
+            .a = rl.isKeyDown(rl.KeyboardKey.x),
+            .b = rl.isKeyDown(rl.KeyboardKey.z),
+            .start = rl.isKeyDown(rl.KeyboardKey.enter),
+            .select = rl.isKeyDown(rl.KeyboardKey.right_shift),
+        };
+        try gameboy.stepFrame(input);
 
         rl.beginTextureMode(texture);
         {
@@ -118,7 +129,7 @@ fn gameboyDoctorMode(gameboy: *Gameboy) !void {
                 cpu.readMem(cpu.pc + 3),
             });
         }
-        _ = cpu.step();
+        _ = try gameboy.step(.{});
     }
 
     writer.flush();

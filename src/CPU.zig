@@ -237,16 +237,16 @@ fn bit_test(self: *CPU, bit: u3, register: u8) void {
 
 fn writeMem(self: *CPU, pointer: u16, val: u8) void {
     self.cycles += 4;
-    self.mmu.writeMem(pointer, val);
+    self.mmu.write(pointer, val);
 }
 
 pub fn readMem(self: *CPU, pointer: u16) u8 {
     self.cycles += 4;
-    return self.mmu.readMem(pointer);
+    return self.mmu.read(pointer);
 }
 
 pub fn peekMem(self: *CPU, pointer: u16) u8 {
-    return self.mmu.readMem(pointer);
+    return self.mmu.read(pointer);
 }
 
 const Register = extern union {
