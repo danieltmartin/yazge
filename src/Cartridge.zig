@@ -48,7 +48,7 @@ pub fn read(self: *Cartridge, address: u16) u8 {
 pub fn setBankNumber(self: *Cartridge, n: u8) void {
     var bank_number = n & 0b00011111;
     if (bank_number == 0) bank_number = 1;
-    const start = @as(u16, bank_number) * 16384;
+    const start = @as(usize, bank_number) * 16384;
     const end = start + 16384;
     if (start < 0 or end >= self.rom.len) {
         return;
