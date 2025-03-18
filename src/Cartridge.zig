@@ -20,9 +20,12 @@ pub fn init(alloc: Allocator, rom: []u8) !*Cartridge {
         return error.InvalidCartridgeSize;
     }
 
+    const rom_copy = try alloc.dupe(u8, rom);
+    errdefer alloc.free(rom_copy);
+
     cart.* = .{
         .alloc = alloc,
-        .rom = try alloc.dupe(u8, rom),
+        .rom = rom_copy,
         .bank_n = undefined,
         .cart_type = try cartridgeType(rom),
     };
