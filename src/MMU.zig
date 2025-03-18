@@ -29,7 +29,7 @@ const echo_ram_end = 0xFDFF;
 const io_registers_start = 0xFF00;
 const io_registers_end = 0xFF7F;
 
-const interrupt_enable_flag = 0xFFFF;
+const interrupt_enable = 0xFFFF;
 const interrupt_flag = 0xFF0F;
 
 const timer_counter = 0xFF05;
@@ -112,6 +112,9 @@ pub fn write(self: *MMU, pointer: u16, val: u8) void {
             // Mask out lower nibble; it's read-only.
             self.memory[joypad] = val & 0xF0;
         },
+        divider => {
+            self.memory[divider] = 0;
+        },
         else => {
             if (pointer >= vram_start and pointer <= vram_end) {
                 self.ppu.vram[pointer - vram_start] = val;
@@ -150,7 +153,7 @@ pub fn read(self: *MMU, pointer: u16) u8 {
         return self.ppu.vram[pointer - vram_start];
     }
     if (pointer >= io_registers_start and pointer <= io_registers_end) {
-        if (pointer == interrupt_flag or pointer == interrupt_enable_flag) {
+        if (pointer == interrupt_flag or pointer == interrupt_enable) {
             return self.memory[pointer];
         }
         return 0xFF;
@@ -174,9 +177,10 @@ pub fn requestInterrupt(self: *MMU, inter_type: InterruptType) void {
 }
 
 /// Determines whether any interrupts need to be handled, or returns null otherwise.
-/// If there is an interrupt to to be handled, the interrupt flag is automatically cleared.
+/// If there is an interrupt to to be handled and clear_interrupt is true, then
+/// the interrupt is cleared in the IF register.
 pub fn nextInterrupt(self: *MMU, clear_interrupt: bool) ?InterruptType {
-    const enable = self.memory[interrupt_enable_flag];
+    const enable = self.memory[interrupt_enable];
     const flag = self.memory[interrupt_flag];
     for (0..5) |i| {
         const bit = @as(u8, 1) << @truncate(i);
@@ -189,12 +193,29 @@ pub fn nextInterrupt(self: *MMU, clear_interrupt: bool) ?InterruptType {
     return null;
 }
 
+pub const InterruptFlag = packed struct {
+    v_blank: bool,
+    lcd: bool,
+    timer: bool,
+    serial: bool,
+    joypad: bool,
+    _: u3,
+};
+
+pub fn readInterruptFlag(self: *MMU) InterruptFlag {
+    return @bitCast(self.memory[interrupt_flag]);
+}
+
+pub fn readInterruptEnable(self: *MMU) InterruptFlag {
+    return @bitCast(self.memory[interrupt_enable]);
+}
+
 pub fn readTimerCounter(self: *MMU) u8 {
     return self.memory[timer_counter];
 }
 
 pub fn writeTimerCounter(self: *MMU, counter: u8) void {
-    self.memory[timer_control] = counter;
+    self.memory[timer_counter] = counter;
 }
 
 pub const TimerControl = packed struct {
@@ -219,6 +240,14 @@ pub fn readTimerControl(self: *MMU) TimerControl {
 
 pub fn readTimerModulo(self: *MMU) u8 {
     return self.memory[timer_modulo];
+}
+
+pub fn readDivider(self: *MMU) u8 {
+    return self.memory[divider];
+}
+
+pub fn writeDivider(self: *MMU, val: u8) void {
+    self.memory[divider] = val;
 }
 
 pub fn readInput(self: *MMU) u8 {

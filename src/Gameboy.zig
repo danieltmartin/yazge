@@ -25,8 +25,9 @@ ppu: *PPU,
 cartridge: *Cartridge,
 debugger: *Debugger,
 mutex: std.Thread.Mutex,
-cycles_since_clock_increment: u64 = 0,
+clock: u16 = 0,
 cycles_since_last_frame: u64 = 0,
+cycles_since_clock_incr: u64 = 0,
 
 pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enabled: bool) !*Gameboy {
     const gameboy = try alloc.create(Gameboy);
@@ -71,12 +72,12 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
     const debugger = try Debugger.init(alloc, gameboy, debug_enabled);
     errdefer debugger.deinit();
 
-    // if (boot_rom == null) {
-    //     try debugger.addBreakpoint(0x0100);
-    // } else {
-    //     try debugger.addBreakpoint(0x0000);
-    // }
-    // try debugger.evalBreakpoints();
+    if (boot_rom == null) {
+        try debugger.addBreakpoint(0x0100);
+    } else {
+        try debugger.addBreakpoint(0x0000);
+    }
+    try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;
 
@@ -111,8 +112,14 @@ pub fn step(self: *Gameboy, input: Input) !void {
 /// Called whenever the CPU executes a granular amount of cycles.
 fn tick(self: *Gameboy, cycles: u8) void {
     self.cycles_since_last_frame += cycles;
-    self.ppu.stepN(cycles);
-    self.triggerInterrupts(cycles);
+
+    for (0..cycles) |_| {
+        self.clock +%= 1;
+        self.mmu.writeDivider(@truncate(self.clock >> 8));
+
+        self.ppu.step();
+        self.triggerInterrupts();
+    }
 }
 
 fn tickCallback(self: *Gameboy) CPU.TickCallback {
@@ -127,7 +134,7 @@ fn tickCallback(self: *Gameboy) CPU.TickCallback {
     };
 }
 
-fn triggerInterrupts(self: *Gameboy, cycles: u64) void {
+fn triggerInterrupts(self: *Gameboy) void {
     if (self.ppu.mode == .v_blank) {
         self.mmu.requestInterrupt(.v_blank);
     }
@@ -135,16 +142,14 @@ fn triggerInterrupts(self: *Gameboy, cycles: u64) void {
     const timer_control = self.mmu.readTimerControl();
 
     if (timer_control.enable) {
-        self.cycles_since_clock_increment += cycles;
-
         const counter_increment_cycles = timer_control.tCycles();
+        self.cycles_since_clock_incr += 1;
 
-        if (self.cycles_since_clock_increment >= counter_increment_cycles) {
+        if (self.cycles_since_clock_incr >= counter_increment_cycles) {
             var timer_counter = self.mmu.readTimerCounter();
-            self.cycles_since_clock_increment = 0;
+            self.cycles_since_clock_incr = 0;
             timer_counter, const overflowed = @addWithOverflow(timer_counter, 1);
             if (overflowed == 1) {
-                std.debug.print("timer interrupt\n", .{});
                 self.mmu.writeTimerCounter(self.mmu.readTimerModulo());
                 self.mmu.requestInterrupt(.timer);
             } else {

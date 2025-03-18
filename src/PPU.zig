@@ -89,10 +89,6 @@ pub fn deinit(self: *PPU) void {
     self.alloc.destroy(self);
 }
 
-pub fn stepN(self: *PPU, cycles: u8) void {
-    for (0..cycles) |_| self.step();
-}
-
 pub fn step(self: *PPU) void {
     if (!self.control.enable) {
         return;

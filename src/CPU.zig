@@ -39,6 +39,7 @@ pc: u16 = 0,
 ime: bool = false,
 
 halted: bool = false,
+halt_bug: bool = false,
 
 on_tick: TickCallback,
 
@@ -67,6 +68,12 @@ pub fn deinit(self: *CPU) void {
 }
 
 pub fn step(self: *CPU) void {
+    if (self.halt_bug) {
+        self.on_tick.call(4);
+        self.halt_bug = false;
+        return;
+    }
+
     if (self.ime) {
         if (self.halted) {
             self.halted = false;
@@ -87,6 +94,8 @@ pub fn step(self: *CPU) void {
         if (self.mmu.nextInterrupt(false) != null) {
             self.halted = false;
         }
+        self.on_tick.call(4);
+        return;
     }
 
     const opcode = self.popPC(u8);
@@ -621,6 +630,7 @@ fn inc_r16(name: OperandName) OpHandler {
         fn inc(cpu: *CPU) void {
             const r16 = cpu.op(name).r16;
             r16.* +%= 1;
+            cpu.on_tick.call(4);
         }
     }.inc;
 }
@@ -646,6 +656,7 @@ fn dec_r16(name: OperandName) OpHandler {
     return struct {
         fn dec(cpu: *CPU) void {
             cpu.op(name).r16.* -%= 1;
+            cpu.on_tick.call(4);
         }
     }.dec;
 }
@@ -711,6 +722,7 @@ fn add_hl_r16(name: OperandName) OpHandler {
             cpu.op(.hl).r16.* = result[0];
             cpu.af.parts.n = 0;
             cpu.af.parts.c = result[1];
+            cpu.on_tick.call(4);
         }
     }.add;
 }
@@ -1053,6 +1065,7 @@ fn push_r16(cpu: *CPU, r16: *u16) void {
     cpu.writeMem(cpu.sp, @truncate(r16.* >> 8));
     cpu.sp -%= 1;
     cpu.writeMem(cpu.sp, @truncate(r16.*));
+    cpu.on_tick.call(4);
 }
 
 fn push_af(cpu: *CPU) void {
@@ -1076,6 +1089,7 @@ fn pop_r16(cpu: *CPU, r16: *u16) void {
     cpu.sp +%= 1;
     r16.* = (r16.* & 0x00FF) | (@as(u16, cpu.readMem(cpu.sp)) << 8);
     cpu.sp +%= 1;
+    cpu.on_tick.call(4);
 }
 
 fn pop_af(cpu: *CPU) void {
@@ -1097,6 +1111,7 @@ fn pop_hl(cpu: *CPU) void {
 
 fn jp_a16(cpu: *CPU) void {
     cpu.pc = cpu.popPC(u16);
+    cpu.on_tick.call(4);
 }
 
 fn jp_hl(cpu: *CPU) void {
@@ -1227,12 +1242,12 @@ fn sbc_a_r8(name: OperandName) OpHandler {
 fn ret(cpu: *CPU) void {
     cpu.pc = @as(u16, cpu.readMem(cpu.sp)) | (@as(u16, cpu.readMem(cpu.sp +% 1)) << 8);
     cpu.sp +%= 2;
+    cpu.on_tick.call(4);
 }
 
 fn ret_cc(cpu: *CPU, condition: bool) void {
     cpu.on_tick.call(4);
     if (condition) {
-        cpu.on_tick.call(4);
         ret(cpu);
     }
 }
@@ -1297,6 +1312,10 @@ fn daa(cpu: *CPU) void {
 }
 
 fn halt(cpu: *CPU) void {
+    if (cpu.mmu.nextInterrupt(false) != null) {
+        cpu.halt_bug = true;
+        return;
+    }
     cpu.halted = true;
 }
 

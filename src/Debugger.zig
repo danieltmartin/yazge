@@ -20,6 +20,8 @@ const Command = union(enum) {
     },
     PrintCPUState,
     PrintLCDState,
+    PrintClock,
+    PrintInterruptState,
 };
 
 alloc: Allocator,
@@ -103,6 +105,8 @@ pub fn replLoop(self: *Debugger) !void {
             .DeleteBreakpoint => |b| try self.deleteBreakpoint(b.address),
             .PrintCPUState => try self.printCPUState(),
             .PrintLCDState => self.printLCDState(),
+            .PrintClock => self.printClock(),
+            .PrintInterruptState => self.printInterruptState(),
         }
         std.time.sleep(10 * std.time.ns_per_ms);
     }
@@ -116,6 +120,8 @@ pub fn shouldStep(self: *Debugger) bool {
     const on_prefix = !self.gameboy.cpu.prefixed and sm83.unprefixed[opcode].mnemonic == .PREFIX;
 
     if (on_prefix) return true;
+
+    if (self.gameboy.cpu.halted or self.gameboy.cpu.halt_bug) return true;
 
     if (self.stop_on_next) {
         self.stop_on_next = false;
@@ -170,6 +176,10 @@ fn parseCommand(command: []const u8) !Command {
         return .PrintCPUState;
     } else if (std.mem.eql(u8, command, "lcd")) {
         return .PrintLCDState;
+    } else if (std.mem.eql(u8, command, "clock")) {
+        return .PrintClock;
+    } else if (std.mem.eql(u8, command, "interrupt")) {
+        return .PrintInterruptState;
     }
 
     return error.InvalidCommand;
@@ -261,6 +271,46 @@ pub fn printOam(self: *Debugger) void {
         });
     }
     std.debug.print("\n", .{});
+}
+
+fn printClock(self: *Debugger) void {
+    std.debug.print("Clock: {d}\n", .{self.gameboy.clock});
+}
+
+fn printInterruptState(self: *Debugger) void {
+    self.gameboy.mutex.lock();
+    defer self.gameboy.mutex.unlock();
+
+    const enable = self.gameboy.mmu.readInterruptEnable();
+    const flag = self.gameboy.mmu.readInterruptFlag();
+    std.debug.print(
+        \\IME: {}
+        \\Interrupt Enable:
+        \\  VBlank: {}
+        \\  LCD: {}
+        \\  Timer: {}
+        \\  Serial: {}
+        \\  Joypad: {}
+        \\Interrupt Flag:
+        \\  VBlank: {}
+        \\  LCD: {}
+        \\  Timer: {}
+        \\  Serial: {}
+        \\  Joypad: {}
+        \\
+    , .{
+        self.gameboy.cpu.ime,
+        enable.v_blank,
+        enable.lcd,
+        enable.timer,
+        enable.serial,
+        enable.joypad,
+        flag.v_blank,
+        flag.lcd,
+        flag.timer,
+        flag.serial,
+        flag.joypad,
+    });
 }
 
 pub fn printCPUState(self: *Debugger) !void {
