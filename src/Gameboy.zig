@@ -72,12 +72,12 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
     const debugger = try Debugger.init(alloc, gameboy, debug_enabled);
     errdefer debugger.deinit();
 
-    if (boot_rom == null) {
-        try debugger.addBreakpoint(0x0100);
-    } else {
-        try debugger.addBreakpoint(0x0000);
-    }
-    try debugger.evalBreakpoints();
+    // if (boot_rom == null) {
+    //     try debugger.addBreakpoint(0x0100);
+    // } else {
+    //     try debugger.addBreakpoint(0x0000);
+    // }
+    // try debugger.evalBreakpoints();
 
     gameboy.debugger = debugger;
 

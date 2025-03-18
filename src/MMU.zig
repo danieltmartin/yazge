@@ -16,13 +16,15 @@ const lcd_control = 0xFF40;
 const lcd_y_coordinate = 0xFF44;
 const scroll_y = 0xFF42;
 const scroll_x = 0xFF43;
-const rom_bank_number = 0x2000;
+const external_ram_enable_end = 0x1FFF;
 const dma_oam_transfer = 0xFF46;
 const joypad = 0xFF00;
 
 const cartridge_end = 0x7FFF;
 const vram_start = 0x8000;
 const vram_end = 0x9FFF;
+const external_ram_start = 0xA000;
+const external_ram_end = 0xBFFF;
 const wram_start = 0xC000;
 const echo_ram_start = 0xE000;
 const echo_ram_end = 0xFDFF;
@@ -81,8 +83,8 @@ pub fn deinit(self: *MMU) void {
     self.alloc.destroy(self);
 }
 
-pub fn write(self: *MMU, pointer: u16, val: u8) void {
-    switch (pointer) {
+pub fn write(self: *MMU, address: u16, val: u8) void {
+    switch (address) {
         disable_boot_rom => {
             if (val != 0) {
                 self.boot_rom_mapped = false;
@@ -97,9 +99,6 @@ pub fn write(self: *MMU, pointer: u16, val: u8) void {
         },
         scroll_y => {
             self.ppu.scroll_y = val;
-        },
-        rom_bank_number => {
-            self.cartridge.setBankNumber(val);
         },
         dma_oam_transfer => {
             const start: u16 = @as(u16, val) << 8;
@@ -116,12 +115,16 @@ pub fn write(self: *MMU, pointer: u16, val: u8) void {
             self.memory[divider] = 0;
         },
         else => {
-            if (pointer >= vram_start and pointer <= vram_end) {
-                self.ppu.vram[pointer - vram_start] = val;
-            } else if (pointer >= echo_ram_start and pointer <= echo_ram_end) {
+            if (address >= vram_start and address <= vram_end) {
+                self.ppu.vram[address - vram_start] = val;
+            } else if (address >= echo_ram_start and address <= echo_ram_end) {
                 return;
+            } else if (address <= cartridge_end or
+                (address >= external_ram_start and address <= external_ram_end))
+            {
+                self.cartridge.write(address, val);
             } else {
-                self.memory[pointer] = val;
+                self.memory[address] = val;
             }
         },
     }
@@ -147,6 +150,9 @@ pub fn read(self: *MMU, pointer: u16) u8 {
         return self.boot_rom.?[pointer];
     }
     if (pointer <= cartridge_end) {
+        return self.cartridge.read(pointer);
+    }
+    if (pointer >= external_ram_start and pointer <= external_ram_end) {
         return self.cartridge.read(pointer);
     }
     if (pointer >= vram_start and pointer <= vram_end) {
