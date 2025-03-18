@@ -35,6 +35,7 @@ const interrupt_flag = 0xFF0F;
 const timer_counter = 0xFF05;
 const timer_control = 0xFF07;
 const timer_modulo = 0xFF06;
+const divider = 0xFF04;
 
 alloc: Allocator,
 ppu: *PPU,

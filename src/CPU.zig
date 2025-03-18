@@ -12,6 +12,15 @@ const CPUError = error{
     ProgramCounterOutOfBounds,
 };
 
+pub const TickCallback = struct {
+    context: *anyopaque,
+    func: *const fn (*anyopaque, u8) void,
+
+    fn call(self: *const TickCallback, cycles: u8) void {
+        return self.func(self.context, cycles);
+    }
+};
+
 const v_blank_interrupt_handler = 0x40;
 const lcd_interrupt_handler = 0x48;
 const timer_interrupt_handler = 0x50;
@@ -28,7 +37,10 @@ hl: Register = Register.init(),
 sp: u16 = 0,
 pc: u16 = 0,
 ime: bool = false,
+
 halted: bool = false,
+
+on_tick: TickCallback,
 
 /// The MMU allows reading and writing to memory and I/O devices.
 mmu: *MMU,
@@ -37,16 +49,14 @@ mmu: *MMU,
 /// that the next opcode fetched belongs to the extended instruction set.
 prefixed: bool = false,
 
-/// Number of cycles caused by the last executed instruction.
-cycles: u8 = 0,
-
-pub fn init(alloc: Allocator, mmu: *MMU) !*CPU {
+pub fn init(alloc: Allocator, mmu: *MMU, on_tick: TickCallback) !*CPU {
     const cpu = try alloc.create(CPU);
     errdefer alloc.destroy(cpu);
 
     cpu.* = .{
         .alloc = alloc,
         .mmu = mmu,
+        .on_tick = on_tick,
     };
 
     return cpu;
@@ -56,9 +66,7 @@ pub fn deinit(self: *CPU) void {
     self.alloc.destroy(self);
 }
 
-pub fn step(self: *CPU) u8 {
-    self.cycles = 0;
-
+pub fn step(self: *CPU) void {
     if (self.ime) {
         if (self.halted) {
             self.halted = false;
@@ -73,7 +81,7 @@ pub fn step(self: *CPU) u8 {
                 .joypad => joypad_interrupt_handler,
             };
             self.handleInterrupt(handler_address);
-            return self.cycles;
+            return;
         }
     } else if (self.halted) {
         if (self.mmu.nextInterrupt(false) != null) {
@@ -89,8 +97,6 @@ pub fn step(self: *CPU) u8 {
     } else {
         instructions[opcode](self);
     }
-
-    return self.cycles;
 }
 
 pub fn peekNext(self: *CPU, buf: *[3]u8) struct { sm83.Instruction, []u8 } {
@@ -236,12 +242,12 @@ fn bit_test(self: *CPU, bit: u3, register: u8) void {
 }
 
 fn writeMem(self: *CPU, pointer: u16, val: u8) void {
-    self.cycles += 4;
+    self.on_tick.call(4);
     self.mmu.write(pointer, val);
 }
 
 pub fn readMem(self: *CPU, pointer: u16) u8 {
-    self.cycles += 4;
+    self.on_tick.call(4);
     return self.mmu.read(pointer);
 }
 
@@ -279,7 +285,7 @@ const AFRegister = extern union {
 fn handleInterrupt(cpu: *CPU, address: u16) void {
     cpu.push_r16(&cpu.pc);
     cpu.pc = address;
-    cpu.cycles += 12;
+    cpu.on_tick.call(12);
 }
 
 fn noop(_: *CPU) void {}
@@ -1101,7 +1107,7 @@ fn jp_nz_a16(cpu: *CPU) void {
     const a16 = cpu.popPC(u16);
     if (cpu.af.parts.z == 0) {
         cpu.pc = a16;
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
     }
 }
 
@@ -1109,7 +1115,7 @@ fn jp_nc_a16(cpu: *CPU) void {
     const a16 = cpu.popPC(u16);
     if (cpu.af.parts.c == 0) {
         cpu.pc = a16;
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
     }
 }
 
@@ -1117,7 +1123,7 @@ fn jp_c_a16(cpu: *CPU) void {
     const a16 = cpu.popPC(u16);
     if (cpu.af.parts.c == 1) {
         cpu.pc = a16;
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
     }
 }
 
@@ -1125,7 +1131,7 @@ fn jp_z_a16(cpu: *CPU) void {
     const a16 = cpu.popPC(u16);
     if (cpu.af.parts.z == 1) {
         cpu.pc = a16;
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
     }
 }
 
@@ -1134,7 +1140,7 @@ fn jr_cc_e8(cpu: *CPU, condition: bool) void {
     if (condition) {
         const pc: i32 = @intCast(cpu.pc);
         cpu.pc = @intCast(pc +% e8);
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
     }
 }
 
@@ -1158,7 +1164,7 @@ fn jr_e8(cpu: *CPU) void {
     const e8 = cpu.popPC(i8);
     const pc: i32 = @intCast(cpu.pc);
     cpu.pc = @intCast(pc +% e8);
-    cpu.cycles += 4;
+    cpu.on_tick.call(4);
 }
 
 fn cp_a(cpu: *CPU, value: u8) void {
@@ -1224,9 +1230,9 @@ fn ret(cpu: *CPU) void {
 }
 
 fn ret_cc(cpu: *CPU, condition: bool) void {
-    cpu.cycles += 4;
+    cpu.on_tick.call(4);
     if (condition) {
-        cpu.cycles += 4;
+        cpu.on_tick.call(4);
         ret(cpu);
     }
 }
