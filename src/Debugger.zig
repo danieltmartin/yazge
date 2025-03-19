@@ -112,7 +112,7 @@ pub fn replLoop(self: *Debugger) !void {
     }
 }
 
-pub fn shouldStep(self: *Debugger) bool {
+pub fn shouldStep(self: *Debugger) !bool {
     if (!self.mutex.tryLock()) return false;
     defer self.mutex.unlock();
 
@@ -123,26 +123,16 @@ pub fn shouldStep(self: *Debugger) bool {
 
     if (self.gameboy.cpu.halted or self.gameboy.cpu.halt_bug) return true;
 
-    if (self.stop_on_next) {
+    if (self.stop_on_next or self.checkBreakpoint()) {
         self.stop_on_next = false;
         self.paused = true;
+        try self.print("\n");
+        try self.printCPUState();
+        try self.printPrompt();
         return true;
     }
 
     return !self.paused;
-}
-
-pub fn evalBreakpoints(self: *Debugger) !void {
-    if (self.stop_on_next or self.checkBreakpoint()) {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        self.paused = true;
-
-        try self.print("\n");
-        try self.printCPUState();
-        try self.printPrompt();
-    }
 }
 
 fn printPrompt(self: *Debugger) !void {

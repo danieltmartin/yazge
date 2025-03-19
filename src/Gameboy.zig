@@ -72,12 +72,11 @@ pub fn init(alloc: Allocator, cartridge_rom: []u8, boot_rom: ?[]u8, debug_enable
     const debugger = try Debugger.init(alloc, gameboy, debug_enabled);
     errdefer debugger.deinit();
 
-    // if (boot_rom == null) {
-    //     try debugger.addBreakpoint(0x0100);
-    // } else {
-    //     try debugger.addBreakpoint(0x0000);
-    // }
-    // try debugger.evalBreakpoints();
+    if (boot_rom == null) {
+        try debugger.addBreakpoint(0x0100);
+    } else {
+        try debugger.addBreakpoint(0x0000);
+    }
 
     gameboy.debugger = debugger;
 
@@ -102,11 +101,10 @@ pub fn stepFrame(self: *Gameboy, input: Input) !void {
 }
 
 pub fn step(self: *Gameboy, input: Input) !void {
-    if (!self.debugger.shouldStep()) return;
+    if (!try self.debugger.shouldStep()) return;
 
     self.mmu.input = input;
     self.cpu.step();
-    try self.debugger.evalBreakpoints();
 }
 
 /// Called whenever the CPU executes a granular amount of cycles.
