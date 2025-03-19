@@ -189,9 +189,9 @@ pub fn read(self: *MMU, address: u16) u8 {
 
 pub fn step(self: *MMU) void {
     if (self.dma_cycles_left > 0) {
-        if (self.dma_cycles_left <= 140 * 4 and self.dma_cycles_left % 4 == 0) {
+        if (self.dma_cycles_left <= 160 * 4 and self.dma_cycles_left % 4 == 0) {
             const from = self.dma_start + 160 - (self.dma_cycles_left / 4);
-            const to = 0xFEA0 - (self.dma_cycles_left / 4);
+            const to = 0xFE9F - (self.dma_cycles_left / 4) + 1;
             self.memory[to] = self.memory[from];
         }
         self.dma_cycles_left -= 1;
