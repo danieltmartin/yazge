@@ -37,6 +37,7 @@ hl: Register = Register.init(),
 sp: u16 = 0,
 pc: u16 = 0,
 ime: bool = false,
+ime_pending: bool = false,
 
 halted: bool = false,
 halt_bug: bool = false,
@@ -96,6 +97,11 @@ pub fn step(self: *CPU) void {
         }
         self.on_tick.call(4);
         return;
+    }
+
+    if (self.ime_pending) {
+        self.ime = true;
+        self.ime_pending = false;
     }
 
     const opcode = self.popPC(u8);
@@ -1286,11 +1292,12 @@ fn reti(cpu: *CPU) void {
 }
 
 fn ei(cpu: *CPU) void {
-    cpu.ime = true;
+    cpu.ime_pending = true;
 }
 
 fn di(cpu: *CPU) void {
     cpu.ime = false;
+    cpu.ime_pending = false;
 }
 
 fn daa(cpu: *CPU) void {
