@@ -30,6 +30,8 @@ const echo_ram_start = 0xE000;
 const echo_ram_end = 0xFDFF;
 const io_registers_start = 0xFF00;
 const io_registers_end = 0xFF7F;
+const hram_start = 0xFF80;
+const hram_end = 0xFFFE;
 
 const interrupt_enable = 0xFFFF;
 const interrupt_flag = 0xFF0F;
@@ -47,6 +49,8 @@ memory: *[64 * 1024]u8,
 cartridge: *Cartridge,
 fix_y_coordinate: bool = false,
 input: Input = .{},
+dma_cycles_left: u16 = 0,
+dma_start: u16 = 0,
 
 const Config = struct {
     memory: *[64 * 1024]u8,
@@ -84,6 +88,15 @@ pub fn deinit(self: *MMU) void {
 }
 
 pub fn write(self: *MMU, address: u16, val: u8) void {
+    // Only HRAM is accessible during a DMA transfer.
+    if (self.dmaInProgress()) {
+        if (address >= hram_start and address <= hram_end) {
+            self.memory[address] = val;
+        } else {
+            return;
+        }
+    }
+
     switch (address) {
         disable_boot_rom => {
             if (val != 0) {
@@ -101,11 +114,12 @@ pub fn write(self: *MMU, address: u16, val: u8) void {
             self.ppu.scroll_y = val;
         },
         dma_oam_transfer => {
-            const start: u16 = @as(u16, val) << 8;
-            // TODO this needs to take the appropriate number of cycles.
-            // For now this may be ok because games typically wait the number of cycles
-            // the DMA transfer takes anyway.
-            @memcpy(self.memory[0xFE00..0xFEA0], self.memory[start .. start + 160]);
+            // Start DMA transfer. The transfer takes 160 M-cycles.
+            // Multiply by 4 since we are using T-cycles. Add an additional
+            // 4 T-cycles to account for the delay until the DMA transfer
+            // actually starts.
+            self.dma_cycles_left = 160 * 4 + 4;
+            self.dma_start = @as(u16, val) << 8;
         },
         joypad => {
             // Mask out lower nibble; it's read-only.
@@ -130,38 +144,62 @@ pub fn write(self: *MMU, address: u16, val: u8) void {
     }
 }
 
-pub fn read(self: *MMU, pointer: u16) u8 {
-    if (pointer == lcd_y_coordinate) {
+pub fn read(self: *MMU, address: u16) u8 {
+    // Only HRAM is accessible during a DMA transfer.
+    if (self.dmaInProgress()) {
+        if (address >= hram_start and address <= hram_end) {
+            return self.memory[address];
+        } else {
+            return 0xFF;
+        }
+    }
+
+    if (address == lcd_y_coordinate) {
         if (self.fix_y_coordinate) {
             return 0x90;
         }
         return self.ppu.current_scanline;
     }
-    if (pointer == scroll_x) {
+    if (address == scroll_x) {
         return self.ppu.scroll_x;
     }
-    if (pointer == scroll_y) {
+    if (address == scroll_y) {
         return self.ppu.scroll_y;
     }
-    if (pointer == joypad) {
+    if (address == joypad) {
         return self.readInput();
     }
-    if (self.boot_rom_mapped and pointer <= self.boot_rom.?.len) {
-        return self.boot_rom.?[pointer];
+    if (self.boot_rom_mapped and address <= self.boot_rom.?.len) {
+        return self.boot_rom.?[address];
     }
-    if (pointer <= cartridge_end) {
-        return self.cartridge.read(pointer);
+    if (address <= cartridge_end) {
+        return self.cartridge.read(address);
     }
-    if (pointer >= external_ram_start and pointer <= external_ram_end) {
-        return self.cartridge.read(pointer);
+    if (address >= external_ram_start and address <= external_ram_end) {
+        return self.cartridge.read(address);
     }
-    if (pointer >= vram_start and pointer <= vram_end) {
-        return self.ppu.vram[pointer - vram_start];
+    if (address >= vram_start and address <= vram_end) {
+        return self.ppu.vram[address - vram_start];
     }
-    if (pointer >= echo_ram_start and pointer <= echo_ram_end) {
-        return self.memory[wram_start + (pointer - echo_ram_start)];
+    if (address >= echo_ram_start and address <= echo_ram_end) {
+        return self.memory[wram_start + (address - echo_ram_start)];
     }
-    return self.memory[pointer];
+    return self.memory[address];
+}
+
+pub fn step(self: *MMU) void {
+    if (self.dma_cycles_left > 0) {
+        if (self.dma_cycles_left <= 140 * 4 and self.dma_cycles_left % 4 == 0) {
+            const from = self.dma_start + 160 - (self.dma_cycles_left / 4);
+            const to = 0xFEA0 - (self.dma_cycles_left / 4);
+            self.memory[to] = self.memory[from];
+        }
+        self.dma_cycles_left -= 1;
+    }
+}
+
+fn dmaInProgress(self: *MMU) bool {
+    return self.dma_cycles_left > 0 and self.dma_cycles_left <= 140 * 4;
 }
 
 pub const InterruptType = enum(u8) {

@@ -117,6 +117,7 @@ fn tick(self: *Gameboy, cycles: u8) void {
         self.clock +%= 1;
         self.mmu.writeDivider(@truncate(self.clock >> 8));
 
+        self.mmu.step();
         self.ppu.step();
         self.triggerInterrupts();
     }
