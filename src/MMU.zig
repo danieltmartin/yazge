@@ -158,12 +158,6 @@ pub fn read(self: *MMU, pointer: u16) u8 {
     if (pointer >= vram_start and pointer <= vram_end) {
         return self.ppu.vram[pointer - vram_start];
     }
-    if (pointer >= io_registers_start and pointer <= io_registers_end) {
-        if (pointer == interrupt_flag or pointer == interrupt_enable) {
-            return self.memory[pointer];
-        }
-        return 0xFF;
-    }
     if (pointer >= echo_ram_start and pointer <= echo_ram_end) {
         return self.memory[wram_start + (pointer - echo_ram_start)];
     }

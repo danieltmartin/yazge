@@ -274,7 +274,27 @@ pub fn printOam(self: *Debugger) void {
 }
 
 fn printClock(self: *Debugger) void {
-    std.debug.print("Clock: {d}\n", .{self.gameboy.clock});
+    self.gameboy.mutex.lock();
+    defer self.gameboy.mutex.unlock();
+
+    const timerControl = self.gameboy.mmu.readTimerControl();
+    std.debug.print(
+        \\Clock: {d}
+        \\DIV (Divider register): ${x:0>2}
+        \\TIMA (Timer counter): ${x:0>2}
+        \\TMA (Timer modulo): ${x:0>2}
+        \\TAC (Timer control):
+        \\  Enable: {}
+        \\  Clock select: {} T-cycles
+        \\
+    , .{
+        self.gameboy.clock,
+        self.gameboy.mmu.readDivider(),
+        self.gameboy.mmu.readTimerCounter(),
+        self.gameboy.mmu.readTimerModulo(),
+        timerControl.enable,
+        timerControl.tCycles(),
+    });
 }
 
 fn printInterruptState(self: *Debugger) void {
