@@ -108,6 +108,8 @@ fn setRAMBankNumber(self: *Cartridge, n: u2) void {
 const CartridgeType = enum(u8) {
     rom_only = 0x00,
     mbc1 = 0x01,
+    mbc1_ram = 0x02,
+    mbc_ram_battery = 0x03,
 
     fn max() comptime_int {
         var v: comptime_int = 0;
@@ -128,6 +130,7 @@ fn cartridgeType(rom: []u8) !CartridgeType {
     }
     const cartridge_type = rom[header_type];
     if (cartridge_type > CartridgeType.max()) {
+        std.log.err("unknown cartridge type: {d}", .{cartridge_type});
         return error.UnknownCartridgeType;
     }
     return @enumFromInt(cartridge_type);
