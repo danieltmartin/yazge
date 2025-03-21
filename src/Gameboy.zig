@@ -117,7 +117,12 @@ fn tick(self: *Gameboy, cycles: u8) void {
 
         self.mmu.step();
         self.ppu.step();
-        self.triggerInterrupts();
+
+        self.updateLCDStatus();
+        self.updateTimer();
+        if (self.ppu.mode == .v_blank) {
+            self.mmu.requestInterrupt(.v_blank);
+        }
     }
 }
 
@@ -133,11 +138,27 @@ fn tickCallback(self: *Gameboy) CPU.TickCallback {
     };
 }
 
-fn triggerInterrupts(self: *Gameboy) void {
-    if (self.ppu.mode == .v_blank) {
-        self.mmu.requestInterrupt(.v_blank);
+fn updateLCDStatus(self: *Gameboy) void {
+    const lyc = self.mmu.readLYC();
+    var lcd_status = self.mmu.readLCDStatus();
+    if (self.ppu.control.enable) {
+        lcd_status.ppu_mode = @intFromEnum(self.ppu.mode);
+        lcd_status.lcd_eq_ly = (lyc == self.ppu.current_scanline);
+    } else {
+        lcd_status.ppu_mode = 0;
+        lcd_status.lcd_eq_ly = false;
     }
+    self.mmu.writeLCDStatus(lcd_status);
+    if ((lcd_status.lyc_int_select and lcd_status.lcd_eq_ly) or
+        (lcd_status.mode_0_int_select and self.ppu.mode == .h_blank) or
+        (lcd_status.mode_1_int_select and self.ppu.mode == .v_blank) or
+        (lcd_status.mode_2_int_select and self.ppu.mode == .oam_scan))
+    {
+        self.mmu.requestInterrupt(.lcd);
+    }
+}
 
+fn updateTimer(self: *Gameboy) void {
     const timer_control = self.mmu.readTimerControl();
 
     if (timer_control.enable) {

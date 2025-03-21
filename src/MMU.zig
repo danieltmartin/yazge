@@ -14,6 +14,8 @@ pub const MMUError = error{
 const disable_boot_rom = 0xFF50;
 const lcd_control = 0xFF40;
 const lcd_y_coordinate = 0xFF44;
+const lcd_y_compare = 0xFF45;
+const lcd_status = 0xFF41;
 const scroll_y = 0xFF42;
 const scroll_x = 0xFF43;
 const external_ram_enable_end = 0x1FFF;
@@ -106,6 +108,10 @@ pub fn write(self: *MMU, address: u16, val: u8) void {
         lcd_control => {
             const control: PPU.LCDControl = @bitCast(val);
             self.ppu.setControl(control);
+            // TODO - write through?
+        },
+        lcd_status => {
+            self.memory[lcd_status] = val & 0b01111000;
         },
         scroll_x => {
             self.ppu.scroll_x = val;
@@ -286,6 +292,28 @@ pub fn readDivider(self: *MMU) u8 {
 
 pub fn writeDivider(self: *MMU, val: u8) void {
     self.memory[divider] = val;
+}
+
+pub const LCDStatus = packed struct {
+    ppu_mode: u2,
+    lcd_eq_ly: bool,
+    mode_0_int_select: bool,
+    mode_1_int_select: bool,
+    mode_2_int_select: bool,
+    lyc_int_select: bool,
+    _: u1 = 1,
+};
+
+pub fn readLYC(self: *MMU) u8 {
+    return self.memory[lcd_y_compare];
+}
+
+pub fn readLCDStatus(self: *MMU) LCDStatus {
+    return @bitCast(self.memory[lcd_y_compare]);
+}
+
+pub fn writeLCDStatus(self: *MMU, status: LCDStatus) void {
+    self.memory[lcd_status] = @bitCast(status);
 }
 
 pub fn readInput(self: *MMU) u8 {
