@@ -257,12 +257,12 @@ fn bit_test(self: *CPU, bit: u3, register: u8) void {
 }
 
 fn writeMem(self: *CPU, pointer: u16, val: u8) void {
-    self.on_tick.call(4);
+    defer self.on_tick.call(4);
     self.mmu.write(pointer, val);
 }
 
 pub fn readMem(self: *CPU, pointer: u16) u8 {
-    self.on_tick.call(4);
+    defer self.on_tick.call(4);
     return self.mmu.read(pointer);
 }
 

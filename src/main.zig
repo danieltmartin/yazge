@@ -58,6 +58,7 @@ fn mainLoop(gameboy: *Gameboy) !void {
     rl.setTargetFPS(Gameboy.fps);
 
     const texture = try rl.loadRenderTexture(Gameboy.screen_width, Gameboy.screen_height);
+    var frame: [Gameboy.screen_width * Gameboy.screen_height]rl.Color = undefined;
 
     while (!rl.windowShouldClose()) {
         const input = Input{
@@ -72,21 +73,19 @@ fn mainLoop(gameboy: *Gameboy) !void {
         };
         try gameboy.stepFrame(input);
 
-        rl.beginTextureMode(texture);
-        {
-            for (0..Gameboy.screen_width) |x| {
-                for (0..Gameboy.screen_height) |y| {
-                    const color = switch (gameboy.ppu.framebuffer[x][y]) {
-                        0 => rl.Color.white,
-                        1 => rl.Color.light_gray,
-                        2 => rl.Color.dark_gray,
-                        3 => rl.Color.black,
-                    };
-                    rl.drawPixel(@intCast(x), @intCast(Gameboy.screen_height - y), color);
-                }
+        for (0..Gameboy.screen_width) |x| {
+            for (0..Gameboy.screen_height) |y| {
+                const color = switch (gameboy.ppu.framebuffer[x][y]) {
+                    0 => rl.Color.white,
+                    1 => rl.Color.light_gray,
+                    2 => rl.Color.dark_gray,
+                    3 => rl.Color.black,
+                };
+                frame[y * Gameboy.screen_width + x] = color;
             }
         }
-        rl.endTextureMode();
+
+        rl.updateTexture(texture.texture, @ptrCast(&frame));
 
         rl.beginDrawing();
         defer rl.endDrawing();
