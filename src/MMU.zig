@@ -108,7 +108,7 @@ pub fn write(self: *MMU, address: u16, val: u8) void {
         lcd_control => {
             const control: PPU.LCDControl = @bitCast(val);
             self.ppu.setControl(control);
-            // TODO - write through?
+            self.memory[lcd_control] = val;
         },
         lcd_status => {
             self.memory[lcd_status] = val & 0b01111000;
